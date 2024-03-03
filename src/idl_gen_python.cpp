@@ -52,7 +52,7 @@ static Namer::Config PythonDefaultConfig() {
            /*constants=*/Case::kScreamingSnake,
            /*methods=*/Case::kUpperCamel,
            /*functions=*/Case::kUpperCamel,
-           /*fields=*/Case::kLowerCamel,
+           /*fields=*/Case::kKeep,
            /*variable=*/Case::kLowerCamel,
            /*variants=*/Case::kKeep,
            /*enum_variant_seperator=*/".",
@@ -106,7 +106,7 @@ class PythonGenerator : public BaseGenerator {
   // Begin enum code with a class declaration.
   void BeginEnum(const EnumDef &enum_def, std::string *code_ptr) const {
     auto &code = *code_ptr;
-    code += "class " + namer_.Type(enum_def) + "(object):\n";
+    code += "class " + namer_.Type(enum_def) + "(Enum):\n";
   }
 
   // Starts a new line and then indents.
@@ -1012,7 +1012,6 @@ class PythonGenerator : public BaseGenerator {
     code += "\", size_prefixed=size_prefixed)\n";
     code += "\n";
   }
-
   // Generates struct or table methods.
   void GenStruct(const StructDef &struct_def, std::string *code_ptr,
                  ImportMap &imports) const {
@@ -1042,6 +1041,10 @@ class PythonGenerator : public BaseGenerator {
 
       GenStructAccessor(struct_def, field, code_ptr, imports);
     }
+
+    if (parser_.opts.gen_compare) { GenCompareOperator(struct_def, code_ptr); }
+
+    GenRepr(struct_def, code_ptr);
 
     if (struct_def.fixed) {
       // creates a struct constructor function
@@ -1315,12 +1318,69 @@ class PythonGenerator : public BaseGenerator {
       if (field.deprecated) continue;
 
       // Wrties the comparison statement for this field.
+      const auto field_method = namer_.Method(field) + "()";
+      code += " and \\" + GenIndents(3) + "self." + field_method +
+              " == " + "other." + field_method;
+    }
+    code += "\n";
+  }
+
+  void GenCompareOperatorForObjectAPI(const StructDef &struct_def,
+                          std::string *code_ptr) const {
+    auto &code = *code_ptr;
+    code += GenIndents(1) + "def __eq__(self, other):";
+    code += GenIndents(2) + "return type(self) == type(other)";
+    for (auto it = struct_def.fields.vec.begin();
+         it != struct_def.fields.vec.end(); ++it) {
+      auto &field = **it;
+      if (field.deprecated) continue;
+
+      // Wrties the comparison statement for this field.
       const auto field_field = namer_.Field(field);
       code += " and \\" + GenIndents(3) + "self." + field_field +
               " == " + "other." + field_field;
     }
     code += "\n";
   }
+
+  void GenRepr(const StructDef &struct_def, std::string* code_ptr) const {
+    auto &code = *code_ptr;
+    const auto struct_object = namer_.Type(struct_def);
+
+    code += GenIndents(1) + "def __repr__(self) -> str:";
+    code += GenIndents(2) + "return f'" + struct_object + "(";
+    for (auto it = struct_def.fields.vec.begin();
+         it != struct_def.fields.vec.end(); ++it) {
+      auto &field = **it;
+      if (field.deprecated) continue;
+
+      const auto field_field = namer_.Field(field);
+      code += field_field + "={repr(self." + namer_.Method(field) + "())}, ";
+
+    }
+    code += ")'\n";
+    code += "\n";
+  }
+
+  void GenReprObjectAPI(const StructDef &struct_def, std::string* code_ptr) const {
+    auto &code = *code_ptr;
+    const auto struct_object = namer_.ObjectType(struct_def);
+
+    code += GenIndents(1) + "def __repr__(self) -> str:";
+    code += GenIndents(2) + "return f'" + struct_object + "(";
+    for (auto it = struct_def.fields.vec.begin();
+         it != struct_def.fields.vec.end(); ++it) {
+      auto &field = **it;
+      if (field.deprecated) continue;
+
+      const auto field_field = namer_.Field(field);
+      code += field_field + "={repr(self." + field_field + ")}, ";
+
+    }
+    code += ")'\n";
+    code += "\n";
+  }
+
 
   void GenUnPackForStruct(const StructDef &struct_def, const FieldDef &field,
                           std::string *code_ptr) const {
@@ -1807,7 +1867,9 @@ class PythonGenerator : public BaseGenerator {
 
     InitializeFromObjForObject(struct_def, &code);
 
-    if (parser_.opts.gen_compare) { GenCompareOperator(struct_def, &code); }
+    GenReprObjectAPI(struct_def, &code);
+
+    if (parser_.opts.gen_compare) { GenCompareOperatorForObjectAPI(struct_def, &code); }
 
     GenUnPack(struct_def, &code);
 
@@ -2098,21 +2160,10 @@ class PythonGenerator : public BaseGenerator {
       const std::string local_import = "." + mod;
 
       code += "import flatbuffers\n";
+      code += "from enum import Enum\n";
       code += "from flatbuffers.compat import import_numpy\n";
       if (parser_.opts.python_typing) {
-        code += "from typing import Any\n";
-
-        for (auto import_entry : imports) {
-          // If we have a file called, say, "MyType.py" and in it we have a
-          // class "MyType", we can generate imports -- usually when we
-          // have a type that contains arrays of itself -- of the type
-          // "from .MyType import MyType", which Python can't resolve. So
-          // if we are trying to import ourself, we skip.
-          if (import_entry.first != local_import) {
-            code += "from " + import_entry.first + " import " +
-                    import_entry.second + "\n";
-          }
-        }
+        code += "from typing import Any, Optional\n";
       }
       code += "np = import_numpy()\n\n";
     }
