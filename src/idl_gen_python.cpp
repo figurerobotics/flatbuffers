@@ -142,7 +142,7 @@ class PythonGenerator : public BaseGenerator {
     code += "n = flatbuffers.encode.Get";
     code += "(flatbuffers.packer.uoffset, buf, offset)\n";
     code += Indent + Indent + "x = " + struct_type + "()\n";
-    code += Indent + Indent + "x.Init(buf, n + offset)\n";
+    code += Indent + Indent + "x.init(buf, n + offset)\n";
     code += Indent + Indent + "return x\n";
     code += "\n";
 
@@ -418,7 +418,7 @@ class PythonGenerator : public BaseGenerator {
       code += "from " + import_entry.first + " import " + import_entry.second +
               "\n";
     }
-    code += Indent + Indent + Indent + "obj = Table(bytearray(), 0)\n";
+    code += Indent + Indent + Indent + "obj = flatbuffers.table.Table(bytearray(), 0)\n";
     code += Indent + Indent + Indent + GenGetter(field.value.type);
     code += "obj, o)\n" + Indent + Indent + Indent + "return obj\n";
     code += Indent + Indent + "return None\n\n";
@@ -527,7 +527,7 @@ class PythonGenerator : public BaseGenerator {
       code += GenIndents(3);
       code += "return ";
       code += "self._tab.GetVectorAsNumpy(flatbuffers.number_types.";
-      code += namer_.Method(GenTypeGet(field.value.type));
+      code += LibraryCase(GenTypeGet(field.value.type));
       code += "Flags, o)";
 
       if (IsString(vectortype)) {
@@ -538,7 +538,7 @@ class PythonGenerator : public BaseGenerator {
     } else {
       code += GenIndents(2) + "return ";
       code += "self._tab.GetArrayAsNumpy(flatbuffers.number_types.";
-      code += namer_.Method(GenTypeGet(field.value.type.VectorType()));
+      code += LibraryCase(GenTypeGet(field.value.type.VectorType()));
       code += "Flags, self._tab.Pos + " + NumToString(field.value.offset) +
               ", " + NumToString("self." + namer_.Method(field) + "_length()") +
               ")\n";
@@ -682,7 +682,7 @@ class PythonGenerator : public BaseGenerator {
                             code_ptr, index + 1, in_array);
         } else {
           code += IsArray(field_type) ? "    " : "";
-          code += indent + "    builder.Prepend" + GenMethod(field) + "(";
+          code += indent + "    builder.Prepend" + LibraryCase(GenMethod(field)) + "(";
           code += nameprefix + namer_.Variable(field);
           size_t array_cnt = index + (IsArray(field_type) ? 1 : 0);
           for (size_t i = 0; in_array && i < array_cnt; i++) {
@@ -692,6 +692,11 @@ class PythonGenerator : public BaseGenerator {
         }
       }
     }
+  }
+
+  // Set the case to what the flatbuffers library expects.
+  std::string LibraryCase(const std::string& input) const {
+	  return ConvertCase(input, Case::kUpperCamel);
   }
 
   void EndBuilderBody(std::string *code_ptr) const {
@@ -753,7 +758,7 @@ class PythonGenerator : public BaseGenerator {
     }
     code += "):\n";
     code += Indent + "builder.Prepend";
-    code += GenMethod(field) + "Slot(";
+    code += LibraryCase(GenMethod(field)) + "Slot(";
     code += NumToString(offset) + ", ";
     if (!IsScalar(field.value.type.base_type) && (!struct_def.fixed)) {
       code += "flatbuffers.number_types.UOffsetTFlags.py_type";
@@ -1229,13 +1234,18 @@ class PythonGenerator : public BaseGenerator {
     // Writes __init__ method.
     auto &code_base = *code_ptr;
     GenReceiverForObjectAPI(struct_def, code_ptr);
-    code_base += "__init__(self):";
+    code_base += "__init__(self, **kwargs):";
     code_base += GenIndents(2) + "super.__setattr__(self, '_fb_initialized', False)";
     if (code.empty()) {
       code_base += GenIndents(2) + "pass";
     } else {
       code_base += code;
     }
+
+    code_base += GenIndents(2) + "for k, v in kwargs.items():";
+    code_base += GenIndents(3) + "if not hasattr(self, k):";
+    code_base += GenIndents(4) + "raise AttributeError(f'{k} is not a attribute of {type(self)}')";
+    code_base += GenIndents(3) + "setattr(self, k, v)";
     code_base += GenIndents(2) + "self._fb_initialized = True";
     code_base += "\n";
 
@@ -1939,7 +1949,7 @@ class PythonGenerator : public BaseGenerator {
 
     code +=
         GenIndents(1) + "if unionType == " + union_type + "()." + variant + ":";
-    code += GenIndents(2) + "tab = Table(table.Bytes, table.Pos)";
+    code += GenIndents(2) + "tab = flatbuffers.table.Table(table.Bytes, table.Pos)";
     code += GenIndents(2) + "union = tab.String(table.Pos)";
     code += GenIndents(2) + "return union";
   }
@@ -1995,7 +2005,7 @@ class PythonGenerator : public BaseGenerator {
       case BASE_TYPE_VECTOR: return GenGetter(type.VectorType());
       default:
         return "self._tab.Get(flatbuffers.number_types." +
-               namer_.Method(GenTypeGet(type)) + "Flags, ";
+               LibraryCase(GenTypeGet(type)) + "Flags, ";
     }
   }
 
