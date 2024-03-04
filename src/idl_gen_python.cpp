@@ -647,7 +647,7 @@ class PythonGenerator : public BaseGenerator {
     const std::string struct_type = namer_.Type(struct_def);
 
     code += Indent + "@classmethod\n";
-    code += Indent + "def GetRootAs";
+    code += Indent + "def get_root_as";
     if (parser_.opts.python_typing) {
       code += "(cls, buf, offset: int = 0):";
     } else {
@@ -665,12 +665,12 @@ class PythonGenerator : public BaseGenerator {
     if (!parser_.opts.python_no_type_prefix_suffix) {
       // Add an alias with the old name
       code += Indent + "@classmethod\n";
-      code +=
-          Indent + "def GetRootAs" + struct_type + "(cls, buf, offset=0):\n";
+      code += Indent + "def get_root_as_" + namer_.Method(struct_type) +
+              "(cls, buf, offset=0):\n";
       code += Indent + Indent +
               "\"\"\"This method is deprecated. Please switch to "
-              "GetRootAs.\"\"\"\n";
-      code += Indent + Indent + "return cls.GetRootAs(buf, offset)\n";
+              "get_root_as.\"\"\"\n";
+      code += Indent + Indent + "return cls.get_root_as(buf, offset)\n";
     }
   }
 
@@ -681,9 +681,9 @@ class PythonGenerator : public BaseGenerator {
 
     GenReceiver(struct_def, code_ptr);
     if (parser_.opts.python_typing) {
-      code += "Init(self, buf: bytes, pos: int):\n";
+      code += "init(self, buf: bytes, pos: int):\n";
     } else {
-      code += "Init(self, buf, pos):\n";
+      code += "init(self, buf, pos):\n";
     }
     code += Indent + Indent + "self._tab = flatbuffers.table.Table(buf, pos)\n";
     code += "\n";
@@ -695,7 +695,7 @@ class PythonGenerator : public BaseGenerator {
     auto &code = *code_ptr;
 
     GenReceiver(struct_def, code_ptr);
-    code += namer_.Method(field) + "Length(self)";
+    code += namer_.Method(field) + "_length(self)";
     if (parser_.opts.python_typing) { code += " -> int"; }
     code += ":";
     if (!IsArray(field.value.type)) {
@@ -714,7 +714,7 @@ class PythonGenerator : public BaseGenerator {
     auto &code = *code_ptr;
 
     GenReceiver(struct_def, code_ptr);
-    code += namer_.Method(field) + "IsNone(self)";
+    code += namer_.Method(field) + "_is_none(self)";
     if (parser_.opts.python_typing) { code += " -> bool"; }
     code += ":";
     if (!IsArray(field.value.type)) {
@@ -777,7 +777,7 @@ class PythonGenerator : public BaseGenerator {
     GenReceiver(struct_def, code_ptr);
     code += namer_.Method(field);
     code += "(self, obj):\n";
-    code += Indent + Indent + "obj.Init(self._tab.Bytes, self._tab.Pos + ";
+    code += Indent + Indent + "obj.init(self._tab.Bytes, self._tab.Pos + ";
     code += NumToString(field.value.offset) + ")";
     code += "\n" + Indent + Indent + "return obj\n\n";
   }
@@ -811,7 +811,7 @@ class PythonGenerator : public BaseGenerator {
     }
 
     code += GenIndents(2) + "obj = " + TypeName(field) + "()";
-    code += GenIndents(2) + "obj.Init(self._tab.Bytes, self._tab.Pos + ";
+    code += GenIndents(2) + "obj.init(self._tab.Bytes, self._tab.Pos + ";
     code += NumToString(field.value.offset) + " + i * ";
     code += NumToString(InlineSize(vec_type));
     code += ")" + GenIndents(2) + "return obj\n\n";
@@ -831,9 +831,9 @@ class PythonGenerator : public BaseGenerator {
     code += NumToString(field.value.offset) + " + i * ";
     code += NumToString(InlineSize(field.value.type.VectorType()));
     code += ")) for i in range(";
-    code += "self." + namer_.Method(field) + "Length()" + ")]";
+    code += "self." + namer_.Method(field) + "_length()" + ")]";
     code += GenIndents(2) + "elif j >= 0 and j < self." + namer_.Method(field) +
-            "Length():";
+            "_length():";
     code += GenIndents(3) + "return " + GenGetter(field.value.type);
     code += "self._tab.Pos + flatbuffers.number_types.UOffsetTFlags.py_type(";
     code += NumToString(field.value.offset) + " + j * ";
@@ -876,7 +876,7 @@ class PythonGenerator : public BaseGenerator {
               "\n";
     }
     code += Indent + Indent + Indent + "obj = " + TypeName(field) + "()\n";
-    code += Indent + Indent + Indent + "obj.Init(self._tab.Bytes, x)\n";
+    code += Indent + Indent + Indent + "obj.init(self._tab.Bytes, x)\n";
     code += Indent + Indent + Indent + "return obj\n";
     code += Indent + Indent + "return None\n\n";
   }
@@ -995,7 +995,7 @@ class PythonGenerator : public BaseGenerator {
               "\n";
     }
     code += Indent + Indent + Indent + "obj = " + TypeName(field) + "()\n";
-    code += Indent + Indent + Indent + "obj.Init(self._tab.Bytes, x)\n";
+    code += Indent + Indent + Indent + "obj.init(self._tab.Bytes, x)\n";
     code += Indent + Indent + Indent + "return obj\n";
     code += Indent + Indent + "return None\n\n";
   }
@@ -1043,7 +1043,7 @@ class PythonGenerator : public BaseGenerator {
     if (!(IsScalar(vectortype.base_type))) { return; }
 
     GenReceiver(struct_def, code_ptr);
-    code += namer_.Method(field) + "AsNumpy(self):";
+    code += namer_.Method(field) + "_as_numpy(self):";
     if (!IsArray(field.value.type)) {
       code += OffsetPrefix(field, false);
 
@@ -1063,7 +1063,7 @@ class PythonGenerator : public BaseGenerator {
       code += "self._tab.GetArrayAsNumpy(flatbuffers.number_types.";
       code += namer_.Method(GenTypeGet(field.value.type.VectorType()));
       code += "Flags, self._tab.Pos + " + NumToString(field.value.offset) +
-              ", " + NumToString("self." + namer_.Method(field) + "Length()") +
+              ", " + NumToString("self." + namer_.Method(field) + "_length()") +
               ")\n";
     }
     code += "\n";
@@ -1113,7 +1113,7 @@ class PythonGenerator : public BaseGenerator {
               "\n";
     }
     code += Indent + Indent + Indent + "return " + unqualified_name;
-    code += ".GetRootAs";
+    code += ".get_root_as";
     code += "(self._tab.Bytes, self._tab.Vector(o))\n";
     code += Indent + Indent + "return 0\n";
     code += "\n";
@@ -1572,6 +1572,8 @@ class PythonGenerator : public BaseGenerator {
 
     GenRepr(struct_def, code_ptr);
 
+    GenSetAttr(code_ptr);
+
     if (struct_def.fixed) {
       // creates a struct constructor function
       GenStructBuilder(struct_def, code_ptr);
@@ -1758,11 +1760,14 @@ class PythonGenerator : public BaseGenerator {
     auto &code_base = *code_ptr;
     GenReceiverForObjectAPI(struct_def, code_ptr);
     code_base += "__init__(self):";
+    code_base +=
+        GenIndents(2) + "super.__setattr__(self, '_fb_initialized', False)";
     if (code.empty()) {
       code_base += GenIndents(2) + "pass";
     } else {
       code_base += code;
     }
+    code_base += GenIndents(2) + "self._fb_initialized = True";
     code_base += "\n";
 
     // Merges the typing imports into import_list.
@@ -1798,10 +1803,10 @@ class PythonGenerator : public BaseGenerator {
     const auto struct_type = namer_.Type(struct_def);
 
     code += GenIndents(1) + "@classmethod";
-    code += GenIndents(1) + "def InitFromBuf(cls, buf, pos):";
+    code += GenIndents(1) + "def init_from_buf(cls, buf, pos):";
     code += GenIndents(2) + struct_var + " = " + struct_type + "()";
-    code += GenIndents(2) + struct_var + ".Init(buf, pos)";
-    code += GenIndents(2) + "return cls.InitFromObj(" + struct_var + ")";
+    code += GenIndents(2) + struct_var + ".init(buf, pos)";
+    code += GenIndents(2) + "return cls.init_from_obj(" + struct_var + ")";
     code += "\n";
   }
 
@@ -1812,10 +1817,10 @@ class PythonGenerator : public BaseGenerator {
     const auto struct_type = namer_.Type(struct_def);
 
     code += GenIndents(1) + "@classmethod";
-    code += GenIndents(1) + "def InitFromPackedBuf(cls, buf, pos=0):";
+    code += GenIndents(1) + "def init_from_packed_buf(cls, buf, pos=0):";
     code += GenIndents(2) +
             "n = flatbuffers.encode.Get(flatbuffers.packer.uoffset, buf, pos)";
-    code += GenIndents(2) + "return cls.InitFromBuf(buf, pos+n)";
+    code += GenIndents(2) + "return cls.init_from_buf(buf, pos+n)";
     code += "\n";
   }
 
@@ -1826,9 +1831,9 @@ class PythonGenerator : public BaseGenerator {
     const auto struct_object = namer_.ObjectType(struct_def);
 
     code += GenIndents(1) + "@classmethod";
-    code += GenIndents(1) + "def InitFromObj(cls, " + struct_var + "):";
+    code += GenIndents(1) + "def init_from_obj(cls, " + struct_var + "):";
     code += GenIndents(2) + "x = " + struct_object + "()";
-    code += GenIndents(2) + "x._UnPack(" + struct_var + ")";
+    code += GenIndents(2) + "x._un_pack(" + struct_var + ")";
     code += GenIndents(2) + "return x";
     code += "\n";
   }
@@ -1837,7 +1842,9 @@ class PythonGenerator : public BaseGenerator {
                           std::string *code_ptr) const {
     auto &code = *code_ptr;
     code += GenIndents(1) + "def __eq__(self, other):";
-    code += GenIndents(2) + "return type(self) == type(other)";
+    code += GenIndents(2) + "return type(self) == type(other) \\";
+    code +=
+        GenIndents(3) + "and hasattr(self, '_tab') and hasattr(other, '_tab')";
     for (auto it = struct_def.fields.vec.begin();
          it != struct_def.fields.vec.end(); ++it) {
       auto &field = **it;
@@ -1874,6 +1881,8 @@ class PythonGenerator : public BaseGenerator {
     const auto struct_object = namer_.Type(struct_def);
 
     code += GenIndents(1) + "def __repr__(self) -> str:";
+    code += GenIndents(2) + "if not hasattr(self, '_tab'):";
+    code += GenIndents(3) + " return '" + struct_object + "()'";
     code += GenIndents(2) + "return f'" + struct_object + "(";
     for (auto it = struct_def.fields.vec.begin();
          it != struct_def.fields.vec.end(); ++it) {
@@ -1906,6 +1915,32 @@ class PythonGenerator : public BaseGenerator {
     code += "\n";
   }
 
+  void GenSetAttr(std::string *code_ptr) const {
+    auto &code = *code_ptr;
+    code +=
+        GenIndents(1) + "def __setattr__(self, name:str, value:any) -> any:";
+    code += GenIndents(2) + "if name != '_tab':";
+    code += GenIndents(3) +
+            "raise AttributeError(\"The primary flatbuffers API doesn't allow "
+            "assignment," +
+            " to create a object try the 'ObjectAPI' types that end in 'T'.\")";
+    code += GenIndents(2) + "super.__setattr__(self, name, value)";
+    code += "\n";
+  }
+
+  void GenSetAttrObjectAPI(std::string *code_ptr) const {
+    auto &code = *code_ptr;
+    code +=
+        GenIndents(1) + "def __setattr__(self, name:str, value:any) -> any:";
+    code += GenIndents(2) +
+            "if self._fb_initialized and name not in self.__dict__:";
+    code += GenIndents(3) +
+            "raise AttributeError(f\"Field '{name}' does not exist on "
+            "'{type(self)}'\")";
+    code += GenIndents(2) + "super.__setattr__(self, name, value)";
+    code += "\n";
+  }
+
   void GenUnPackForStruct(const StructDef &struct_def, const FieldDef &field,
                           std::string *code_ptr) const {
     auto &code = *code_ptr;
@@ -1926,7 +1961,7 @@ class PythonGenerator : public BaseGenerator {
     }
     code += ") is not None:";
     code += GenIndents(3) + "self." + field_field + " = " +
-            namer_.ObjectType(field_type) + +".InitFromObj(" + struct_var +
+            namer_.ObjectType(field_type) + +".init_from_obj(" + struct_var +
             "." + field_method + "(";
     // A struct's accessor requires a struct buf instance.
     if (struct_def.fixed && field.value.type.base_type == BASE_TYPE_STRUCT) {
@@ -1961,10 +1996,10 @@ class PythonGenerator : public BaseGenerator {
     const auto struct_var = namer_.Variable(struct_def);
 
     code += GenIndents(2) + "if not " + struct_var + "." + field_method +
-            "IsNone():";
+            "_is_none():";
     code += GenIndents(3) + "self." + field_field + " = []";
     code += GenIndents(3) + "for i in range(" + struct_var + "." +
-            field_method + "Length()):";
+            field_method + "_length()):";
 
     auto field_type = TypeName(field);
     auto one_instance = field_type + "_";
@@ -1978,8 +2013,8 @@ class PythonGenerator : public BaseGenerator {
     code += GenIndents(5) + "self." + field_field + ".append(None)";
     code += GenIndents(4) + "else:";
     code += GenIndents(5) + one_instance + " = " +
-            namer_.ObjectType(field_type) + ".InitFromObj(" + struct_var + "." +
-            field_method + "(i))";
+            namer_.ObjectType(field_type) + ".init_from_obj(" + struct_var +
+            "." + field_method + "(i))";
     code +=
         GenIndents(5) + "self." + field_field + ".append(" + one_instance + ")";
   }
@@ -1993,10 +2028,10 @@ class PythonGenerator : public BaseGenerator {
     const auto struct_var = namer_.Variable(struct_def);
 
     code += GenIndents(2) + "if not " + struct_var + "." + field_method +
-            "IsNone():";
+            "_is_none():";
     code += GenIndents(3) + "self." + field_field + " = []";
     code += GenIndents(3) + "for i in range(" + struct_var + "." +
-            field_method + "Length()):";
+            field_method + "_length()):";
 
     auto field_type = TypeName(field);
     auto one_instance = field_type + "_";
@@ -2010,8 +2045,8 @@ class PythonGenerator : public BaseGenerator {
     code += GenIndents(5) + "self." + field_field + ".append(None)";
     code += GenIndents(4) + "else:";
     code += GenIndents(5) + one_instance + " = " +
-            namer_.ObjectType(field_type) + ".InitFromObj(" + struct_var + "." +
-            field_method + "(i))";
+            namer_.ObjectType(field_type) + ".init_from_obj(" + struct_var +
+            "." + field_method + "(i))";
     code +=
         GenIndents(5) + "self." + field_field + ".append(" + one_instance + ")";
   }
@@ -2027,7 +2062,7 @@ class PythonGenerator : public BaseGenerator {
 
     code += GenIndents(indents) + "self." + field_field + " = []";
     code += GenIndents(indents) + "for i in range(" + struct_var + "." +
-            field_method + "Length()):";
+            field_method + "_length()):";
     code += GenIndents(indents + 1) + "self." + field_field + ".append(" +
             struct_var + "." + field_method + "(i))";
   }
@@ -2041,7 +2076,7 @@ class PythonGenerator : public BaseGenerator {
     const auto struct_var = namer_.Variable(struct_def);
 
     code += GenIndents(2) + "if not " + struct_var + "." + field_method +
-            "IsNone():";
+            "_is_none():";
 
     // String does not have the AsNumpy method.
     if (!(IsScalar(field.value.type.VectorType().base_type))) {
@@ -2113,7 +2148,7 @@ class PythonGenerator : public BaseGenerator {
     const auto struct_var = namer_.Variable(struct_def);
 
     GenReceiverForObjectAPI(struct_def, code_ptr);
-    code_base += "_UnPack(self, " + struct_var + "):";
+    code_base += "_un_pack(self, " + struct_var + "):";
     code_base += GenIndents(2) + "if " + struct_var + " is None:";
     code_base += GenIndents(3) + "return";
 
@@ -2134,7 +2169,7 @@ class PythonGenerator : public BaseGenerator {
     const auto struct_fn = namer_.Function(struct_def);
 
     GenReceiverForObjectAPI(struct_def, code_ptr);
-    code += "Pack(self, builder):";
+    code += "pack(self, builder):";
     code += GenIndents(2) + "return Create" + struct_fn + "(builder";
 
     StructBuilderArgs(struct_def,
@@ -2163,7 +2198,7 @@ class PythonGenerator : public BaseGenerator {
       code_prefix += GenIndents(3) + "for i in reversed(range(len(self." +
                      field_field + "))):";
       code_prefix +=
-          GenIndents(4) + "self." + field_field + "[i].Pack(builder)";
+          GenIndents(4) + "self." + field_field + "[i].pack(builder)";
       code_prefix += GenIndents(3) + field_field + " = builder.EndVector()";
     } else {
       // If the vector is a struct vector, we need to first build accessor for
@@ -2172,7 +2207,7 @@ class PythonGenerator : public BaseGenerator {
       code_prefix += GenIndents(3);
       code_prefix += "for i in range(len(self." + field_field + ")):";
       code_prefix += GenIndents(4) + field_field + "list.append(self." +
-                     field_field + "[i].Pack(builder))";
+                     field_field + "[i].pack(builder))";
 
       code_prefix += GenIndents(3) + struct_type + "Start" + field_method +
                      "Vector(builder, len(self." + field_field + "))";
@@ -2288,12 +2323,12 @@ class PythonGenerator : public BaseGenerator {
       // structs.
       code += GenIndents(2) + "if self." + field_field + " is not None:";
       code += GenIndents(3) + field_field + " = self." + field_field +
-              ".Pack(builder)";
+              ".pack(builder)";
     } else {
       // Tables need to be created before their parent structs are created.
       code_prefix += GenIndents(2) + "if self." + field_field + " is not None:";
       code_prefix += GenIndents(3) + field_field + " = self." + field_field +
-                     ".Pack(builder)";
+                     ".pack(builder)";
       code += GenIndents(2) + "if self." + field_field + " is not None:";
     }
 
@@ -2313,7 +2348,7 @@ class PythonGenerator : public BaseGenerator {
     // TODO(luwa): TypeT should be moved under the None check as well.
     code_prefix += GenIndents(2) + "if self." + field_field + " is not None:";
     code_prefix += GenIndents(3) + field_field + " = self." + field_field +
-                   ".Pack(builder)";
+                   ".pack(builder)";
     code += GenIndents(2) + "if self." + field_field + " is not None:";
     code += GenIndents(3) + struct_type + "Add" + field_method + "(builder, " +
             field_field + ")";
@@ -2327,7 +2362,7 @@ class PythonGenerator : public BaseGenerator {
     const auto struct_type = namer_.Type(struct_def);
 
     GenReceiverForObjectAPI(struct_def, code_ptr);
-    code_base += "Pack(self, builder):";
+    code_base += "pack(self, builder):";
     code += GenIndents(2) + struct_type + "Start(builder)";
     for (auto it = struct_def.fields.vec.begin();
          it != struct_def.fields.vec.end(); ++it) {
@@ -2403,6 +2438,8 @@ class PythonGenerator : public BaseGenerator {
 
     GenReprObjectAPI(struct_def, &code);
 
+    GenSetAttrObjectAPI(&code);
+
     if (parser_.opts.gen_compare) {
       GenCompareOperatorForObjectAPI(struct_def, &code);
     }
@@ -2440,7 +2477,7 @@ class PythonGenerator : public BaseGenerator {
       field_type = package_reference + "." + field_type;
     }
     code += GenIndents(2) + "return " + field_type +
-            ".InitFromBuf(table.Bytes, table.Pos)";
+            ".init_from_buf(table.Bytes, table.Pos)";
   }
 
   void GenUnionCreatorForString(const EnumDef &enum_def, const EnumVal &ev,
