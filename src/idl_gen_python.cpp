@@ -1647,7 +1647,7 @@ class PythonGenerator : public BaseGenerator {
 
     GenReceiverForObjectAPI(struct_def, code_ptr);
     code += "pack(self, builder):";
-    code += GenIndents(2) + "return Create" + struct_fn + "(builder";
+    code += GenIndents(2) + "return Create" + LibraryCase(struct_fn) + "(builder";
 
     StructBuilderArgs(struct_def,
                       /* nameprefix = */ "self.",
