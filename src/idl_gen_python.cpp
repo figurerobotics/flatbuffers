@@ -99,7 +99,8 @@ class PythonGenerator : public BaseGenerator {
   void BeginClass(const StructDef &struct_def, std::string *code_ptr) const {
     auto &code = *code_ptr;
     code += "class " + namer_.Type(struct_def) + "(object):\n";
-    code += Indent + "__slots__ = ['_tab']";
+    code += Indent + "__slots__ = ['_tab']\n";
+    code += Indent + "TYPE_NAME = '"   + namer_.NamespacedType(struct_def) + "'";
     code += "\n\n";
   }
 
@@ -898,10 +899,17 @@ class PythonGenerator : public BaseGenerator {
     code += Indent + "def ";
   }
 
+  // Add a property decorator to allow .field access style to the python objects.
+  void GenPropertyDecorator(std::string* code_ptr) const {
+    auto &code = *code_ptr;
+    code += GenIndents(1) + "@property";
+  }
+
   // Generate a struct field, conditioned on its child type(s).
   void GenStructAccessor(const StructDef &struct_def, const FieldDef &field,
                          std::string *code_ptr, ImportMap &imports) const {
     GenComment(field.doc_comment, code_ptr, &def_comment, Indent.c_str());
+    GenPropertyDecorator(code_ptr);
     if (IsScalar(field.value.type.base_type)) {
       if (struct_def.fixed) {
         GetScalarFieldOfStruct(struct_def, field, code_ptr);
@@ -1069,7 +1077,8 @@ class PythonGenerator : public BaseGenerator {
                               std::string *code_ptr) const {
     auto &code = *code_ptr;
     code += "\n";
-    code += "class " + namer_.ObjectType(struct_def) + "(object):";
+    code += "class " + namer_.ObjectType(struct_def) + "(object):\n";
+    code += Indent + "TYPE_NAME = '"   + namer_.NamespacedType(struct_def) + "'";
     code += "\n";
   }
 
