@@ -909,7 +909,6 @@ class PythonGenerator : public BaseGenerator {
   void GenStructAccessor(const StructDef &struct_def, const FieldDef &field,
                          std::string *code_ptr, ImportMap &imports) const {
     GenComment(field.doc_comment, code_ptr, &def_comment, Indent.c_str());
-    GenPropertyDecorator(code_ptr);
     if (IsScalar(field.value.type.base_type)) {
       if (struct_def.fixed) {
         GetScalarFieldOfStruct(struct_def, field, code_ptr);
