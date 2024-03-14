@@ -239,6 +239,7 @@ class PythonGenerator : public BaseGenerator {
     getter += "o + self._tab.Pos)";
     auto is_bool = IsBool(field.value.type.base_type);
     if (is_bool) { getter = "bool(" + getter + ")"; }
+    if (IsEnum(field.value.type)) { getter = field.value.type.enum_def->name + "(" + getter + ")"; }
     code += Indent + Indent + Indent + "return " + getter + "\n";
     std::string default_value;
     if (field.IsScalarOptional()) {
@@ -764,6 +765,8 @@ class PythonGenerator : public BaseGenerator {
     if (!IsScalar(field.value.type.base_type) && (!struct_def.fixed)) {
       code += "flatbuffers.number_types.UOffsetTFlags.py_type";
       code += "(" + field_var + ")";
+    } else if (IsEnum(field.value.type)) {
+      code += field_var + ".value";
     } else {
       code += field_var;
     }
@@ -1103,6 +1106,8 @@ class PythonGenerator : public BaseGenerator {
     BaseType base_type = field.value.type.base_type;
     if (field.IsScalarOptional()) {
       return "None";
+    } else if (IsEnum(field.value.type)) {
+      return field.value.type.enum_def->name + "(" + std::to_string(field.value.type.enum_def->MinValue()->GetAsUInt64()) + ")";
     } else if (IsBool(base_type)) {
       return field.value.constant == "0" ? "False" : "True";
     } else if (IsFloat(base_type)) {
@@ -1571,7 +1576,7 @@ class PythonGenerator : public BaseGenerator {
     // If numpy exists, use the AsNumpy method to optimize the unpack speed.
     code += GenIndents(3) + "else:";
     code += GenIndents(4) + "self." + field_field + " = " + struct_var + "." +
-            field_method + "AsNumpy()";
+            field_method + "as_numpy()";
   }
 
   void GenUnPackForScalar(const StructDef &struct_def, const FieldDef &field,
@@ -2018,7 +2023,9 @@ class PythonGenerator : public BaseGenerator {
   }
 
   std::string GenFieldTy(const FieldDef &field) const {
-    if (IsScalar(field.value.type.base_type) || IsArray(field.value.type)) {
+    if (IsEnum(field.value.type)) {
+	return field.value.type.enum_def->name;
+    } else if (IsScalar(field.value.type.base_type) || IsArray(field.value.type)) {
       const std::string ty = GenTypeBasic(field.value.type);
       if (ty.find("int") != std::string::npos) { return "int"; }
 
