@@ -616,7 +616,7 @@ class PythonGenerator : public BaseGenerator {
     auto &code = *code_ptr;
     code += "class " + namer_.Type(struct_def) + "(object):\n";
     code += Indent + "__slots__ = ['_tab']\n";
-    code += Indent + "TYPE_NAME = '"   + namer_.NamespacedType(struct_def) + "'";
+    code += Indent + "TYPE_NAME = '" + namer_.NamespacedType(struct_def) + "'";
     code += "\n\n";
   }
 
@@ -755,6 +755,9 @@ class PythonGenerator : public BaseGenerator {
     getter += "o + self._tab.Pos)";
     auto is_bool = IsBool(field.value.type.base_type);
     if (is_bool) { getter = "bool(" + getter + ")"; }
+    if (IsEnum(field.value.type)) {
+      getter = field.value.type.enum_def->name + "(" + getter + ")";
+    }
     code += Indent + Indent + Indent + "return " + getter + "\n";
     std::string default_value;
     if (field.IsScalarOptional()) {
@@ -1288,6 +1291,8 @@ class PythonGenerator : public BaseGenerator {
     if (!IsScalar(field.value.type.base_type) && (!struct_def.fixed)) {
       code += "flatbuffers.number_types.UOffsetTFlags.py_type";
       code += "(" + field_var + ")";
+    } else if (IsEnum(field.value.type)) {
+      code += field_var + ".value";
     } else {
       code += field_var;
     }
@@ -1427,8 +1432,9 @@ class PythonGenerator : public BaseGenerator {
     code += Indent + "def ";
   }
 
-  // Add a property decorator to allow .field access style to the python objects.
-  void GenPropertyDecorator(std::string* code_ptr) const {
+  // Add a property decorator to allow .field access style to the python
+  // objects.
+  void GenPropertyDecorator(std::string *code_ptr) const {
     auto &code = *code_ptr;
     code += GenIndents(1) + "@property";
   }
@@ -1609,7 +1615,7 @@ class PythonGenerator : public BaseGenerator {
     auto &code = *code_ptr;
     code += "\n";
     code += "class " + namer_.ObjectType(struct_def) + "(object):\n";
-    code += Indent + "TYPE_NAME = '"   + namer_.NamespacedType(struct_def) + "'";
+    code += Indent + "TYPE_NAME = '" + namer_.NamespacedType(struct_def) + "'";
     code += "\n";
   }
 
@@ -1635,6 +1641,11 @@ class PythonGenerator : public BaseGenerator {
     BaseType base_type = field.value.type.base_type;
     if (field.IsScalarOptional()) {
       return "None";
+    } else if (IsEnum(field.value.type)) {
+      return field.value.type.enum_def->name + "(" +
+             std::to_string(
+                 field.value.type.enum_def->MinValue()->GetAsUInt64()) +
+             ")";
     } else if (IsBool(base_type)) {
       return field.value.constant == "0" ? "False" : "True";
     } else if (IsFloat(base_type)) {
@@ -2113,7 +2124,7 @@ class PythonGenerator : public BaseGenerator {
       // If numpy exists, use the AsNumpy method to optimize the unpack speed.
       code += GenIndents(3) + "else:";
       code += GenIndents(4) + "self." + field_field + " = " + struct_var + "." +
-              field_method + "AsNumpy()";
+              field_method + "as_numpy()";
     } else {
       GenUnpackforScalarVectorHelper(struct_def, field, code_ptr, 3);
     }
@@ -2192,7 +2203,8 @@ class PythonGenerator : public BaseGenerator {
 
     GenReceiverForObjectAPI(struct_def, code_ptr);
     code += "pack(self, builder):";
-    code += GenIndents(2) + "return Create" + LibraryCase(struct_fn) + "(builder";
+    code +=
+        GenIndents(2) + "return Create" + LibraryCase(struct_fn) + "(builder";
 
     StructBuilderArgs(struct_def,
                       /* nameprefix = */ "self.",
@@ -2572,7 +2584,10 @@ class PythonGenerator : public BaseGenerator {
   }
 
   std::string GenFieldTy(const FieldDef &field) const {
-    if (IsScalar(field.value.type.base_type) || IsArray(field.value.type)) {
+    if (IsEnum(field.value.type)) {
+      return field.value.type.enum_def->name;
+    } else if (IsScalar(field.value.type.base_type) ||
+               IsArray(field.value.type)) {
       const std::string ty = GenTypeBasic(field.value.type);
       if (ty.find("int") != std::string::npos) { return "int"; }
 
