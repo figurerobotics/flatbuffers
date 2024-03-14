@@ -1752,27 +1752,31 @@ class PythonGenerator : public BaseGenerator {
       // Determines field type, default value, and typing imports.
       auto base_type = field.value.type.base_type;
       std::string field_type;
-      switch (base_type) {
-        case BASE_TYPE_UNION: {
-          GenUnionInit(field, &field_type, import_list, &import_typing_list);
-          break;
-        }
-        case BASE_TYPE_STRUCT: {
-          GenStructInit(field, &field_type, import_list, &import_typing_list);
-          break;
-        }
-        case BASE_TYPE_VECTOR:
-        case BASE_TYPE_ARRAY: {
-          GenVectorInit(field, &field_type, import_list, &import_typing_list);
-          break;
-        }
-        default:
-          // Scalar or sting fields.
-          field_type = GetBasePythonTypeForScalarAndString(base_type);
-          if (field.IsScalarOptional()) {
-            field_type = "Optional[" + field_type + "]";
+      if (IsEnum(field.value.type)) {
+        field_type = field.value.type.enum_def->name;
+      } else { 
+        switch (base_type) {
+          case BASE_TYPE_UNION: {
+            GenUnionInit(field, &field_type, import_list, &import_typing_list);
+            break;
           }
-          break;
+          case BASE_TYPE_STRUCT: {
+            GenStructInit(field, &field_type, import_list, &import_typing_list);
+            break;
+          }
+          case BASE_TYPE_VECTOR:
+          case BASE_TYPE_ARRAY: {
+            GenVectorInit(field, &field_type, import_list, &import_typing_list);
+            break;
+          }
+          default:
+            // Scalar or sting fields.
+            field_type = GetBasePythonTypeForScalarAndString(base_type);
+            if (field.IsScalarOptional()) {
+              field_type = "Optional[" + field_type + "]";
+            }
+            break;
+        }
       }
 
       const auto default_value = GetDefaultValue(field);
