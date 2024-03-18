@@ -650,7 +650,7 @@ class PythonGenerator : public BaseGenerator {
     code += Indent + "@classmethod\n";
     code += Indent + "def get_root_as";
     if (parser_.opts.python_typing) {
-      code += "(cls, buf, offset: int = 0):";
+      code += "(cls, buf, offset: int = 0) -> '" + struct_type + "':";
     } else {
       code += "(cls, buf, offset=0):";
     }
@@ -666,8 +666,16 @@ class PythonGenerator : public BaseGenerator {
     if (!parser_.opts.python_no_type_prefix_suffix) {
       // Add an alias with the old name
       code += Indent + "@classmethod\n";
+<<<<<<< HEAD
       code += Indent + "def get_root_as_" + namer_.Method(struct_type) +
               "(cls, buf, offset=0):\n";
+||||||| parent of 5b5a1434 (fixed as_numpy, Add types to get_root)
+      code += Indent + "def get_root_as_" + namer_.Method(struct_type) +
+              "(cls, buf, offset=0):\n";
+=======
+      code += Indent + "def get_root_as_" + namer_.Method(struct_type) +
+              "(cls, buf, offset=0) -> '" + struct_type + "':\n";
+>>>>>>> 5b5a1434 (fixed as_numpy, Add types to get_root)
       code += Indent + Indent +
               "\"\"\"This method is deprecated. Please switch to "
               "get_root_as.\"\"\"\n";
@@ -901,7 +909,7 @@ class PythonGenerator : public BaseGenerator {
 
     code += OffsetPrefix(field);
     code += Indent + Indent + Indent + "return " + GenGetter(field.value.type);
-    code += "o + self._tab.Pos)\n";
+    code += "o + self._tab.Pos).decode('utf-8')\n";
     code += Indent + Indent + "return None\n\n";
   }
 
@@ -1754,7 +1762,7 @@ class PythonGenerator : public BaseGenerator {
       std::string field_type;
       if (IsEnum(field.value.type)) {
         field_type = field.value.type.enum_def->name;
-      } else { 
+      } else {
         switch (base_type) {
           case BASE_TYPE_UNION: {
             GenUnionInit(field, &field_type, import_list, &import_typing_list);
@@ -2128,7 +2136,7 @@ class PythonGenerator : public BaseGenerator {
       // If numpy exists, use the AsNumpy method to optimize the unpack speed.
       code += GenIndents(3) + "else:";
       code += GenIndents(4) + "self." + field_field + " = " + struct_var + "." +
-              field_method + "as_numpy()";
+              field_method + "_as_numpy()";
     } else {
       GenUnpackforScalarVectorHelper(struct_def, field, code_ptr, 3);
     }
