@@ -1915,8 +1915,14 @@ class PythonGenerator : public BaseGenerator {
 
       // Wrties the comparison statement for this field.
       const auto field_field = namer_.Field(field);
-      code += " and \\" + GenIndents(3) + "self." + field_field +
-              " == " + "other." + field_field;
+
+      if (IsVector(field.value.type)) {
+        code += " and \\" + GenIndents(3) + "(self." + field_field +
+                " == " + "other." + field_field + ").all()";
+      } else {
+        code += " and \\" + GenIndents(3) + "self." + field_field +
+                " == " + "other." + field_field;
+      }
     }
     code += "\n";
   }
