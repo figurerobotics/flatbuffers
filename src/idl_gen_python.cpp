@@ -134,7 +134,7 @@ class PythonGenerator : public BaseGenerator {
     code += Indent + "@classmethod\n";
     code += Indent + "def get_root_as";
     if (parser_.opts.python_typing) {
-      code += "(cls, buf, offset: int = 0):";
+      code += "(cls, buf, offset: int = 0) -> '" + struct_type +  "':";
     } else {
       code += "(cls, buf, offset=0):";
     }
@@ -151,7 +151,7 @@ class PythonGenerator : public BaseGenerator {
       // Add an alias with the old name
       code += Indent + "@classmethod\n";
       code +=
-          Indent + "def get_root_as_" + namer_.Method(struct_type) + "(cls, buf, offset=0):\n";
+          Indent + "def get_root_as_" + namer_.Method(struct_type) + "(cls, buf, offset=0) -> '" + struct_type + "':\n";
       code += Indent + Indent +
               "\"\"\"This method is deprecated. Please switch to "
               "get_root_as.\"\"\"\n";
@@ -385,7 +385,7 @@ class PythonGenerator : public BaseGenerator {
 
     code += OffsetPrefix(field);
     code += Indent + Indent + Indent + "return " + GenGetter(field.value.type);
-    code += "o + self._tab.Pos)\n";
+    code += "o + self._tab.Pos).decode('utf-8')\n";
     code += Indent + Indent + "return None\n\n";
   }
 
@@ -1580,7 +1580,7 @@ class PythonGenerator : public BaseGenerator {
     // If numpy exists, use the AsNumpy method to optimize the unpack speed.
     code += GenIndents(3) + "else:";
     code += GenIndents(4) + "self." + field_field + " = " + struct_var + "." +
-            field_method + "as_numpy()";
+            field_method + "_as_numpy()";
   }
 
   void GenUnPackForScalar(const StructDef &struct_def, const FieldDef &field,
