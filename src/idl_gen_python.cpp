@@ -666,16 +666,8 @@ class PythonGenerator : public BaseGenerator {
     if (!parser_.opts.python_no_type_prefix_suffix) {
       // Add an alias with the old name
       code += Indent + "@classmethod\n";
-<<<<<<< HEAD
-      code += Indent + "def get_root_as_" + namer_.Method(struct_type) +
-              "(cls, buf, offset=0):\n";
-||||||| parent of 5b5a1434 (fixed as_numpy, Add types to get_root)
-      code += Indent + "def get_root_as_" + namer_.Method(struct_type) +
-              "(cls, buf, offset=0):\n";
-=======
       code += Indent + "def get_root_as_" + namer_.Method(struct_type) +
               "(cls, buf, offset=0) -> '" + struct_type + "':\n";
->>>>>>> 5b5a1434 (fixed as_numpy, Add types to get_root)
       code += Indent + Indent +
               "\"\"\"This method is deprecated. Please switch to "
               "get_root_as.\"\"\"\n";
@@ -1647,7 +1639,9 @@ class PythonGenerator : public BaseGenerator {
 
   std::string GetDefaultValue(const FieldDef &field) const {
     BaseType base_type = field.value.type.base_type;
-    if (field.IsScalarOptional()) {
+    if (IsVector(field.value.type)) {
+      return "[]";
+    } else if (field.IsScalarOptional()) {
       return "None";
     } else if (IsEnum(field.value.type)) {
       return field.value.type.enum_def->name + "(" +
@@ -1878,7 +1872,7 @@ class PythonGenerator : public BaseGenerator {
     code += GenIndents(1) + "@classmethod";
     code += GenIndents(1) + "def init_from_obj(cls, " + struct_var + "):";
     code += GenIndents(2) + "x = " + struct_object + "()";
-    code += GenIndents(2) + "x._un_pack(" + struct_var + ")";
+    code += GenIndents(2) + "x.unpack(" + struct_var + ")";
     code += GenIndents(2) + "return x";
     code += "\n";
   }
@@ -1917,8 +1911,8 @@ class PythonGenerator : public BaseGenerator {
       const auto field_field = namer_.Field(field);
 
       if (IsVector(field.value.type)) {
-        code += " and \\" + GenIndents(3) + "(self." + field_field +
-                " == " + "other." + field_field + ").all()";
+        code += " and \\" + GenIndents(3) + "np.array_equal(self." +
+                field_field + ", " + "other." + field_field + ")";
       } else {
         code += " and \\" + GenIndents(3) + "self." + field_field +
                 " == " + "other." + field_field;
@@ -1940,8 +1934,16 @@ class PythonGenerator : public BaseGenerator {
       auto &field = **it;
       if (field.deprecated) continue;
 
-      const auto field_field = namer_.Field(field);
-      code += field_field + "={repr(self." + namer_.Method(field) + "())}, ";
+      if (IsVector(field.value.type)) {
+        const auto field_field = namer_.Field(field);
+        code += field_field + "={[repr(self." + namer_.Method(field) +
+                "(i)) for i in range(self." + namer_.Method(field) +
+                "_length())]}, ";
+
+      } else {
+        const auto field_field = namer_.Field(field);
+        code += field_field + "={repr(self." + namer_.Method(field) + "())}, ";
+      }
     }
     code += ")'\n";
     code += "\n";
@@ -2199,7 +2201,7 @@ class PythonGenerator : public BaseGenerator {
     const auto struct_var = namer_.Variable(struct_def);
 
     GenReceiverForObjectAPI(struct_def, code_ptr);
-    code_base += "_un_pack(self, " + struct_var + "):";
+    code_base += "unpack(self, " + struct_var + "):";
     code_base += GenIndents(2) + "if " + struct_var + " is None:";
     code_base += GenIndents(3) + "return";
 
