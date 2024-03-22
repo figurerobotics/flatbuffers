@@ -1551,12 +1551,12 @@ class PythonGenerator : public BaseGenerator {
       field_type = package_reference + "." + TypeName(field);
     }
     code += GenIndents(4) + "if " + struct_var + "." + field_method +
-            "(i) is None:";
+            "_get(i) is None:";
     code += GenIndents(5) + "self." + field_field + ".append(None)";
     code += GenIndents(4) + "else:";
     code += GenIndents(5) + one_instance + " = " +
             namer_.ObjectType(field_type) + ".init_from_obj(" + struct_var + "." +
-            field_method + "(i))";
+            field_method + "_get(i))";
     code +=
         GenIndents(5) + "self." + field_field + ".append(" + one_instance + ")";
   }
@@ -1583,12 +1583,12 @@ class PythonGenerator : public BaseGenerator {
       field_type = package_reference + "." + TypeName(field);
     }
     code += GenIndents(4) + "if " + struct_var + "." + field_method +
-            "(i) is None:";
+            "_get(i) is None:";
     code += GenIndents(5) + "self." + field_field + ".append(None)";
     code += GenIndents(4) + "else:";
     code += GenIndents(5) + one_instance + " = " +
             namer_.ObjectType(field_type) + ".init_from_obj(" + struct_var + "." +
-            field_method + "(i))";
+            field_method + "_get(i))";
     code +=
         GenIndents(5) + "self." + field_field + ".append(" + one_instance + ")";
   }
@@ -1606,7 +1606,7 @@ class PythonGenerator : public BaseGenerator {
     code += GenIndents(indents) + "for i in range(" + struct_var + "." +
             field_method + "_length()):";
     code += GenIndents(indents + 1) + "self." + field_field + ".append(" +
-            struct_var + "." + field_method + "(i))";
+            struct_var + "." + field_method + "_get(i))";
   }
 
   void GenUnPackForScalarVector(const StructDef &struct_def,
@@ -1643,7 +1643,7 @@ class PythonGenerator : public BaseGenerator {
     const auto struct_var = namer_.Variable(struct_def);
 
     code += GenIndents(2) + "self." + field_field + " = " + struct_var + "." +
-            field_method + "()";
+            field_method;
   }
 
   // Generates the UnPack method for the object class.
