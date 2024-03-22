@@ -641,6 +641,16 @@ class PythonGenerator : public BaseGenerator {
     code += enum_def.ToString(ev) + "\n";
   }
 
+  void GenFromBuffer(const StructDef &struct_def, std::string *code_ptr) const {
+    auto &code = *code_ptr;
+    const std::string struct_type = namer_.Type(struct_def);
+
+    code += GenIndents(1) + "@classmethod";
+    code += GenIndents(1) + "def from_buffer(cls, buf, offset = 0) -> '" +
+            struct_type + "' :";
+    code += GenIndents(2) + "return cls.get_root_as(buf, offset)\n\n";
+  }
+
   // Initialize a new struct or table from existing data.
   void NewRootTypeFromBuffer(const StructDef &struct_def,
                              std::string *code_ptr) const {
@@ -673,6 +683,7 @@ class PythonGenerator : public BaseGenerator {
               "get_root_as.\"\"\"\n";
       code += Indent + Indent + "return cls.get_root_as(buf, offset)\n";
     }
+    GenFromBuffer(struct_def, code_ptr);
   }
 
   // Initialize an existing object with other data, to avoid an allocation.
@@ -966,6 +977,34 @@ class PythonGenerator : public BaseGenerator {
   }
 
   // Get the value of a vector's struct member.
+  void GenVectorGenerator(const StructDef &struct_def, const FieldDef &field,
+                          std::string *code_ptr, ImportMap &imports) const {
+    auto &code = *code_ptr;
+    auto vectortype = field.value.type.VectorType();
+
+    GenReceiver(struct_def, code_ptr);
+    const auto name = namer_.Method(field);
+    code += name;
+
+    const ImportMapEntry import_entry = { GenPackageReference(field.value.type),
+                                          TypeName(field) };
+
+    if (parser_.opts.python_typing) {
+      std::string return_type = "Any";
+      if (vectortype.base_type == BASE_TYPE_STRUCT) {
+        return_type = ReturnType(struct_def, field) + " | None";
+      }
+      code += "(self) -> Generator[" + return_type + ", None, None]:";
+      imports.insert(ImportMapEntry{ "typing", "Optional" });
+      imports.insert(import_entry);
+    } else {
+      code += "(self):";
+    }
+    code += GenIndents(2) + "return (self." + name +
+            "_get(i) for i in range(self." + name + "_length()))\n\n";
+  }
+
+  // Get the value of a vector's struct member.
   void GetMemberOfVectorOfStruct(const StructDef &struct_def,
                                  const FieldDef &field, std::string *code_ptr,
                                  ImportMap &imports) const {
@@ -979,11 +1018,11 @@ class PythonGenerator : public BaseGenerator {
 
     if (parser_.opts.python_typing) {
       const std::string return_type = ReturnType(struct_def, field);
-      code += "(self, j: int) -> Optional[" + return_type + "]";
+      code += "_get(self, j: int) -> Optional[" + return_type + "]";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
       imports.insert(import_entry);
     } else {
-      code += "(self, j)";
+      code += "_get(self, j)";
     }
     code += ":" + OffsetPrefix(field);
     code += Indent + Indent + Indent + "x = self._tab.Vector(o)\n";
@@ -1016,9 +1055,9 @@ class PythonGenerator : public BaseGenerator {
     GenReceiver(struct_def, code_ptr);
     code += namer_.Method(field);
     if (parser_.opts.python_typing) {
-      code += "(self, j: int)";
+      code += "_get(self, j: int)";
     } else {
-      code += "(self, j)";
+      code += "_get(self, j)";
     }
     code += ":";
     code += OffsetPrefix(field);
@@ -1443,6 +1482,7 @@ class PythonGenerator : public BaseGenerator {
   void GenStructAccessor(const StructDef &struct_def, const FieldDef &field,
                          std::string *code_ptr, ImportMap &imports) const {
     GenComment(field.doc_comment, code_ptr, &def_comment, Indent.c_str());
+    GenPropertyDecorator(code_ptr);
     if (IsScalar(field.value.type.base_type)) {
       if (struct_def.fixed) {
         GetScalarFieldOfStruct(struct_def, field, code_ptr);
@@ -1464,8 +1504,10 @@ class PythonGenerator : public BaseGenerator {
         case BASE_TYPE_VECTOR: {
           auto vectortype = field.value.type.VectorType();
           if (vectortype.base_type == BASE_TYPE_STRUCT) {
+            GenVectorGenerator(struct_def, field, code_ptr, imports);
             GetMemberOfVectorOfStruct(struct_def, field, code_ptr, imports);
           } else {
+            GenVectorGenerator(struct_def, field, code_ptr, imports);
             GetMemberOfVectorOfNonStruct(struct_def, field, code_ptr);
             if (parser_.opts.python_gen_numpy) {
               GetVectorOfNonStructAsNumpy(struct_def, field, code_ptr);
@@ -1934,16 +1976,8 @@ class PythonGenerator : public BaseGenerator {
       auto &field = **it;
       if (field.deprecated) continue;
 
-      if (IsVector(field.value.type)) {
-        const auto field_field = namer_.Field(field);
-        code += field_field + "={[repr(self." + namer_.Method(field) +
-                "(i)) for i in range(self." + namer_.Method(field) +
-                "_length())]}, ";
-
-      } else {
-        const auto field_field = namer_.Field(field);
-        code += field_field + "={repr(self." + namer_.Method(field) + "())}, ";
-      }
+      const auto field_field = namer_.Field(field);
+      code += field_field + "={repr(self." + namer_.Method(field) + ")}, ";
     }
     code += ")'\n";
     code += "\n";
@@ -2782,7 +2816,7 @@ class PythonGenerator : public BaseGenerator {
   // Begin by declaring namespace and imports.
   void BeginFile(const std::string &name_space_name, const bool needs_imports,
                  std::string *code_ptr, const std::string &mod,
-                 const ImportMap &imports) const {
+                 const ImportMap &) const {
     auto &code = *code_ptr;
     code = code + "# " + FlatBuffersGeneratedWarning() + "\n\n";
     code += "# namespace: " + name_space_name + "\n\n";
@@ -2796,7 +2830,7 @@ class PythonGenerator : public BaseGenerator {
       }
       code += "from enum import Enum\n";
       if (parser_.opts.python_typing) {
-        code += "from typing import Any, Optional\n";
+        code += "from typing import Any, Optional, Generator\n";
       }
       if (parser_.opts.python_gen_numpy) { code += "np = import_numpy()\n\n"; }
     }
