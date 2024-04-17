@@ -788,10 +788,15 @@ class PythonGenerator : public BaseGenerator {
   void GetStructFieldOfStruct(const StructDef &struct_def,
                               const FieldDef &field,
                               std::string *code_ptr) const {
+
+    const Type &type = field.value.type;
+    const std::string field_type = namer_.Type(*type.struct_def);
+
     auto &code = *code_ptr;
     GenReceiver(struct_def, code_ptr);
     code += namer_.Method(field);
-    code += "(self, obj):\n";
+    code += "(self):\n";
+    code += Indent + Indent + "obj = " + field_type + "()\n";
     code += Indent + Indent + "obj.init(self._tab.Bytes, self._tab.Pos + ";
     code += NumToString(field.value.offset) + ")";
     code += "\n" + Indent + Indent + "return obj\n\n";
@@ -810,7 +815,7 @@ class PythonGenerator : public BaseGenerator {
 
     if (parser_.opts.python_typing) {
       const std::string return_type = ReturnType(struct_def, field);
-      code += "(self, i: int)";
+      code += "_get(self, i: int)";
       code += " -> " + return_type + ":";
 
       imports.insert(import_entry);
@@ -1179,14 +1184,21 @@ class PythonGenerator : public BaseGenerator {
                          const std::string nameprefix,
                          const std::string namesuffix, bool has_field_name,
                          const std::string fieldname_suffix,
-                         std::string *code_ptr) const {
+                         std::string *code_ptr, bool callsite = false) const {
     for (auto it = struct_def.fields.vec.begin();
          it != struct_def.fields.vec.end(); ++it) {
       auto &field = **it;
       const auto &field_type = field.value.type;
       const auto &type =
           IsArray(field_type) ? field_type.VectorType() : field_type;
-      if (IsStruct(type)) {
+      if (IsArray(field_type) && callsite) {
+	std::ranges::for_each(field.value.type.struct_def->fields.vec,
+                       [&](auto* sub_field){
+			  *code_ptr += ", [__f." + namer_.Field(*sub_field) + " for __f in " + nameprefix + namer_.Field(field) + namesuffix + "]";
+                       });
+
+
+      } else if (IsStruct(type)) {
         // Generate arguments for a struct inside a struct. To ensure names
         // don't clash, and to make it obvious these arguments are constructing
         // a nested struct, prefix the name with the field name.
@@ -1519,6 +1531,7 @@ class PythonGenerator : public BaseGenerator {
         case BASE_TYPE_ARRAY: {
           auto vectortype = field.value.type.VectorType();
           if (vectortype.base_type == BASE_TYPE_STRUCT) {
+            GenVectorGenerator(struct_def, field, code_ptr, imports);
             GetArrayOfStruct(struct_def, field, code_ptr, imports);
           } else {
             GetArrayOfNonStruct(struct_def, field, code_ptr);
@@ -1683,6 +1696,10 @@ class PythonGenerator : public BaseGenerator {
     BaseType base_type = field.value.type.base_type;
     if (IsVector(field.value.type)) {
       return "[]";
+    } else if (IsArray(field.value.type)) {
+      const Type &type = field.value.type;
+      const std::string field_type = namer_.ObjectType(*type.struct_def);
+      return "[" + field_type  + "()] * " + NumToString(field.value.type.fixed_length) ;
     } else if (field.IsScalarOptional()) {
       return "None";
     } else if (IsEnum(field.value.type)) {
@@ -1932,7 +1949,7 @@ class PythonGenerator : public BaseGenerator {
       if (field.deprecated) continue;
 
       // Wrties the comparison statement for this field.
-      const auto field_method = namer_.Method(field) + "()";
+      const auto field_method = namer_.Method(field);
       code += " and \\" + GenIndents(3) + "self." + field_method +
               " == " + "other." + field_method;
     }
@@ -2041,20 +2058,10 @@ class PythonGenerator : public BaseGenerator {
       field_type = package_reference + "." + TypeName(field);
     }
 
-    code += GenIndents(2) + "if " + struct_var + "." + field_method + "(";
-    // if field is a struct, we need to create an instance for it first.
-    if (struct_def.fixed && field.value.type.base_type == BASE_TYPE_STRUCT) {
-      code += field_type + "()";
-    }
-    code += ") is not None:";
+    code += GenIndents(2) + "if " + struct_var + "." + field_method + " is not None:";
     code += GenIndents(3) + "self." + field_field + " = " +
             namer_.ObjectType(field_type) + +".init_from_obj(" + struct_var +
-            "." + field_method + "(";
-    // A struct's accessor requires a struct buf instance.
-    if (struct_def.fixed && field.value.type.base_type == BASE_TYPE_STRUCT) {
-      code += field_type + "()";
-    }
-    code += "))";
+            "." + field_method + ")";
   }
 
   void GenUnPackForUnion(const StructDef &struct_def, const FieldDef &field,
@@ -2264,7 +2271,7 @@ class PythonGenerator : public BaseGenerator {
                       /* nameprefix = */ "self.",
                       /* namesuffix = */ "",
                       /* has_field_name = */ true,
-                      /* fieldname_suffix = */ ".", code_ptr);
+                      /* fieldname_suffix = */ ".", code_ptr, true);
     code += ")\n";
   }
 
