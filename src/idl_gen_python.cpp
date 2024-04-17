@@ -129,7 +129,7 @@ class PythonGenerator : public BaseGenerator {
                              std::string *code_ptr) const {
     auto &code = *code_ptr;
     const std::string struct_type = namer_.Type(struct_def);
-    
+
     code += GenIndents(1) + "@classmethod";
     code += GenIndents(1) + "def from_buffer(cls, buf, offset = 0) -> '" + struct_type + "' :";
     code += GenIndents(2) + "return cls.get_root_as(buf, offset)\n\n";
@@ -327,7 +327,7 @@ class PythonGenerator : public BaseGenerator {
     auto &code = *code_ptr;
     GenReceiver(struct_def, code_ptr);
     code += namer_.Method(field);
-    code += "(self, j = None):";
+    code += "_get(self, j = None):";
     code += GenIndents(2) + "if j is None:";
     code += GenIndents(3) + "return [" + GenGetter(field.value.type);
     code += "self._tab.Pos + flatbuffers.number_types.UOffsetTFlags.py_type(";
@@ -471,16 +471,16 @@ class PythonGenerator : public BaseGenerator {
 
     if (parser_.opts.python_typing) {
       std::string return_type = "Any";
-      if (vectortype.base_type == BASE_TYPE_STRUCT) {	    
+      if (vectortype.base_type == BASE_TYPE_STRUCT) {
       	return_type = ReturnType(struct_def, field) + " | None";
-      } 
+      }
       code += "(self) -> Generator[" + return_type + ", None, None]:";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
       imports.insert(import_entry);
     } else {
       code += "(self):";
     }
-    code += GenIndents(2) + "return (self." + name + "_get(i) for i in range(self." 
+    code += GenIndents(2) + "return (self." + name + "_get(i) for i in range(self."
 	    + name + "_length()))\n\n";
   }
 
@@ -668,14 +668,13 @@ class PythonGenerator : public BaseGenerator {
       const auto &field_type = field.value.type;
       const auto &type =
           IsArray(field_type) ? field_type.VectorType() : field_type;
-      if (IsArray(field_type) && callsite) {
-	std::ranges::for_each(field.value.type.struct_def->fields.vec,
-                       [&](auto* sub_field){
-			  *code_ptr += ", [__f." + namer_.Field(*sub_field) + " for __f in " + nameprefix + namer_.Field(field) + namesuffix + "]";
-                       });
-
-
-      } else if (IsStruct(type)) {
+      if (IsStruct(type)) {
+        if (IsArray(field_type) && callsite) {
+	        std::ranges::for_each(field.value.type.struct_def->fields.vec,
+                        [&](auto* sub_field){
+                          *code_ptr += ", [__f." + namer_.Field(*sub_field) + " for __f in " + nameprefix + namer_.Field(field) + namesuffix + "]";
+                          });
+      } else {
         // Generate arguments for a struct inside a struct. To ensure names
         // don't clash, and to make it obvious these arguments are constructing
         // a nested struct, prefix the name with the field name.
@@ -685,6 +684,7 @@ class PythonGenerator : public BaseGenerator {
         }
         StructBuilderArgs(*field.value.type.struct_def, subprefix, namesuffix,
                           has_field_name, fieldname_suffix, code_ptr);
+       }
       } else {
         auto &code = *code_ptr;
         code += std::string(", ") + nameprefix;
@@ -1003,6 +1003,7 @@ class PythonGenerator : public BaseGenerator {
             GenVectorGenerator(struct_def, field, code_ptr, imports);
             GetArrayOfStruct(struct_def, field, code_ptr, imports);
           } else {
+            GenVectorGenerator(struct_def, field, code_ptr, imports);
             GetArrayOfNonStruct(struct_def, field, code_ptr);
             GetVectorOfNonStructAsNumpy(struct_def, field, code_ptr);
             GetVectorAsNestedFlatbuffer(struct_def, field, code_ptr, imports);
@@ -1164,9 +1165,15 @@ class PythonGenerator : public BaseGenerator {
     if (IsVector(field.value.type)) {
       return "[]";
     } else if (IsArray(field.value.type)) {
-      const Type &type = field.value.type;
-      const std::string field_type = namer_.ObjectType(*type.struct_def);
-      return "[" + field_type  + "()] * " + NumToString(field.value.type.fixed_length) ;
+      const auto nested_type = field.value.type.VectorType();
+      if (IsScalar(nested_type.base_type)) {
+	      const auto field_type = GetBasePythonTypeForScalarAndString(nested_type.base_type);
+        return "[" + field_type  + "()] * " + NumToString(field.value.type.fixed_length) ;
+      } else {
+        const Type &type = field.value.type;
+        const std::string field_type = namer_.ObjectType(*type.struct_def);
+        return "[" + field_type  + "()] * " + NumToString(field.value.type.fixed_length) ;
+      }
     } else if (field.IsScalarOptional()) {
       return "None";
     } else if (IsEnum(field.value.type)) {
@@ -1279,7 +1286,7 @@ class PythonGenerator : public BaseGenerator {
       std::string field_type;
       if (IsEnum(field.value.type)) {
         field_type = field.value.type.enum_def->name;
-      } else { 
+      } else {
         switch (base_type) {
           case BASE_TYPE_UNION: {
             GenUnionInit(field, &field_type, import_list, &import_typing_list);
@@ -1429,7 +1436,7 @@ class PythonGenerator : public BaseGenerator {
       // Wrties the comparison statement for this field.
       const auto field_field = namer_.Field(field);
 
-      if (IsVector(field.value.type)) {
+      if (IsVector(field.value.type) || IsArray(field.value.type)) {
         code += " and \\" + GenIndents(3) + "np.array_equal(self." + field_field +
                 ", " + "other." + field_field + ")";
       } else {
@@ -1452,7 +1459,7 @@ class PythonGenerator : public BaseGenerator {
          it != struct_def.fields.vec.end(); ++it) {
       auto &field = **it;
       if (field.deprecated) continue;
-      
+
       const auto field_field = namer_.Field(field);
       code += field_field + "={repr(self." + namer_.Method(field) + ")}, ";
 
@@ -1485,7 +1492,7 @@ class PythonGenerator : public BaseGenerator {
     auto &code = *code_ptr;
     code += GenIndents(1) + "def __setattr__(self, name:str, value:any) -> any:";
     code += GenIndents(2) + "if name != '_tab':";
-    code += GenIndents(3) + "raise AttributeError(\"The primary flatbuffers API doesn't allow assignment," + 
+    code += GenIndents(3) + "raise AttributeError(\"The primary flatbuffers API doesn't allow assignment," +
 	    " to create a object try the 'ObjectAPI' types that end in 'T'.\")";
     code += GenIndents(2) + "super.__setattr__(self, name, value)";
     code += "\n";
