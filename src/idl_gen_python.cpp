@@ -788,7 +788,6 @@ class PythonGenerator : public BaseGenerator {
   void GetStructFieldOfStruct(const StructDef &struct_def,
                               const FieldDef &field,
                               std::string *code_ptr) const {
-
     const Type &type = field.value.type;
     const std::string field_type = namer_.Type(*type.struct_def);
 
@@ -844,7 +843,7 @@ class PythonGenerator : public BaseGenerator {
     auto &code = *code_ptr;
     GenReceiver(struct_def, code_ptr);
     code += namer_.Method(field);
-    code += "(self, j = None):";
+    code += "_get(self, j = None):";
     code += GenIndents(2) + "if j is None:";
     code += GenIndents(3) + "return [" + GenGetter(field.value.type);
     code += "self._tab.Pos + flatbuffers.number_types.UOffsetTFlags.py_type(";
@@ -1191,23 +1190,25 @@ class PythonGenerator : public BaseGenerator {
       const auto &field_type = field.value.type;
       const auto &type =
           IsArray(field_type) ? field_type.VectorType() : field_type;
-      if (IsArray(field_type) && callsite) {
-	std::ranges::for_each(field.value.type.struct_def->fields.vec,
-                       [&](auto* sub_field){
-			  *code_ptr += ", [__f." + namer_.Field(*sub_field) + " for __f in " + nameprefix + namer_.Field(field) + namesuffix + "]";
-                       });
-
-
-      } else if (IsStruct(type)) {
-        // Generate arguments for a struct inside a struct. To ensure names
-        // don't clash, and to make it obvious these arguments are constructing
-        // a nested struct, prefix the name with the field name.
-        auto subprefix = nameprefix;
-        if (has_field_name) {
-          subprefix += namer_.Field(field) + fieldname_suffix;
+      if (IsStruct(type)) {
+        if (IsArray(field_type) && callsite) {
+          std::ranges::for_each(
+              field.value.type.struct_def->fields.vec, [&](auto *sub_field) {
+                *code_ptr += ", [__f." + namer_.Field(*sub_field) +
+                             " for __f in " + nameprefix + namer_.Field(field) +
+                             namesuffix + "]";
+              });
+        } else {
+          // Generate arguments for a struct inside a struct. To ensure names
+          // don't clash, and to make it obvious these arguments are
+          // constructing a nested struct, prefix the name with the field name.
+          auto subprefix = nameprefix;
+          if (has_field_name) {
+            subprefix += namer_.Field(field) + fieldname_suffix;
+          }
+          StructBuilderArgs(*field.value.type.struct_def, subprefix, namesuffix,
+                            has_field_name, fieldname_suffix, code_ptr);
         }
-        StructBuilderArgs(*field.value.type.struct_def, subprefix, namesuffix,
-                          has_field_name, fieldname_suffix, code_ptr);
       } else {
         auto &code = *code_ptr;
         code += std::string(", ") + nameprefix;
@@ -1534,6 +1535,7 @@ class PythonGenerator : public BaseGenerator {
             GenVectorGenerator(struct_def, field, code_ptr, imports);
             GetArrayOfStruct(struct_def, field, code_ptr, imports);
           } else {
+            GenVectorGenerator(struct_def, field, code_ptr, imports);
             GetArrayOfNonStruct(struct_def, field, code_ptr);
             if (parser_.opts.python_gen_numpy) {
               GetVectorOfNonStructAsNumpy(struct_def, field, code_ptr);
@@ -1697,9 +1699,18 @@ class PythonGenerator : public BaseGenerator {
     if (IsVector(field.value.type)) {
       return "[]";
     } else if (IsArray(field.value.type)) {
-      const Type &type = field.value.type;
-      const std::string field_type = namer_.ObjectType(*type.struct_def);
-      return "[" + field_type  + "()] * " + NumToString(field.value.type.fixed_length) ;
+      const auto nested_type = field.value.type.VectorType();
+      if (IsScalar(nested_type.base_type)) {
+        const auto field_type =
+            GetBasePythonTypeForScalarAndString(nested_type.base_type);
+        return "[" + field_type + "()] * " +
+               NumToString(field.value.type.fixed_length);
+      } else {
+        const Type &type = field.value.type;
+        const std::string field_type = namer_.ObjectType(*type.struct_def);
+        return "[" + field_type + "()] * " +
+               NumToString(field.value.type.fixed_length);
+      }
     } else if (field.IsScalarOptional()) {
       return "None";
     } else if (IsEnum(field.value.type)) {
@@ -1969,7 +1980,7 @@ class PythonGenerator : public BaseGenerator {
       // Wrties the comparison statement for this field.
       const auto field_field = namer_.Field(field);
 
-      if (IsVector(field.value.type)) {
+      if (IsVector(field.value.type) || IsArray(field.value.type)) {
         code += " and \\" + GenIndents(3) + "np.array_equal(self." +
                 field_field + ", " + "other." + field_field + ")";
       } else {
@@ -2058,7 +2069,8 @@ class PythonGenerator : public BaseGenerator {
       field_type = package_reference + "." + TypeName(field);
     }
 
-    code += GenIndents(2) + "if " + struct_var + "." + field_method + " is not None:";
+    code += GenIndents(2) + "if " + struct_var + "." + field_method +
+            " is not None:";
     code += GenIndents(3) + "self." + field_field + " = " +
             namer_.ObjectType(field_type) + +".init_from_obj(" + struct_var +
             "." + field_method + ")";
