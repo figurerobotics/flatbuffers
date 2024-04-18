@@ -1851,6 +1851,9 @@ class PythonGenerator : public BaseGenerator {
       std::string field_type;
       if (IsEnum(field.value.type) || IsEnum(field.value.type.VectorType())) {
         field_type = field.value.type.enum_def->name;
+        if (IsArray(field.value.type) || IsVector(field.value.type)){
+          field_type = "List[" + field_type + "]";
+        }
       } else {
         switch (base_type) {
           case BASE_TYPE_UNION: {
