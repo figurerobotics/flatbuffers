@@ -747,11 +747,16 @@ class PythonGenerator : public BaseGenerator {
                               std::string *code_ptr) const {
     auto &code = *code_ptr;
     std::string getter = GenGetter(field.value.type);
+    getter += "self._tab.Pos + flatbuffers.number_types.UOffsetTFlags.py_type(";
+    getter += NumToString(field.value.offset) + "))\n";
+    if (IsEnum(field.value.type)) {
+      getter = field.value.type.enum_def->name + "(" + getter + ")";
+    }
+
     GenReceiver(struct_def, code_ptr);
     code += namer_.Method(field);
-    code += "(self): return " + getter;
-    code += "self._tab.Pos + flatbuffers.number_types.UOffsetTFlags.py_type(";
-    code += NumToString(field.value.offset) + "))\n";
+    code += "(self): \n";
+    code += Indent + " return " + getter;
   }
 
   // Get the value of a table's scalar.
@@ -853,11 +858,15 @@ class PythonGenerator : public BaseGenerator {
     code += "self." + namer_.Method(field) + "_length()" + ")]";
     code += GenIndents(2) + "elif j >= 0 and j < self." + namer_.Method(field) +
             "_length():";
-    code += GenIndents(3) + "return " + GenGetter(field.value.type);
-    code += "self._tab.Pos + flatbuffers.number_types.UOffsetTFlags.py_type(";
-    code += NumToString(field.value.offset) + " + j * ";
-    code += NumToString(InlineSize(field.value.type.VectorType()));
-    code += "))";
+    auto getter = GenGetter(field.value.type);
+    getter += "self._tab.Pos + flatbuffers.number_types.UOffsetTFlags.py_type(";
+    getter += NumToString(field.value.offset) + " + j * ";
+    getter += NumToString(InlineSize(field.value.type.VectorType()));
+    getter += "))";
+    if (IsEnum(field.value.type.VectorType())) {
+      getter = field.value.type.enum_def->name + "(" + getter + ")";
+    }
+    code += GenIndents(3) + "return " + getter;
     code += GenIndents(2) + "else:";
     code += GenIndents(3) + "return None\n\n";
   }
@@ -1067,9 +1076,16 @@ class PythonGenerator : public BaseGenerator {
     code += OffsetPrefix(field);
     code += Indent + Indent + Indent + "a = self._tab.Vector(o)\n";
     code += Indent + Indent + Indent;
-    code += "return " + GenGetter(field.value.type);
-    code += "a + flatbuffers.number_types.UOffsetTFlags.py_type(j * ";
-    code += NumToString(InlineSize(vectortype)) + "))\n";
+
+    auto getter = GenGetter(field.value.type);
+    getter += "a + flatbuffers.number_types.UOffsetTFlags.py_type(j * ";
+    getter += NumToString(InlineSize(vectortype)) + "))";
+
+    if (IsEnum(field.value.type.VectorType())) {
+      getter = field.value.type.enum_def->name + "(" + getter + ")";
+    }
+    code += "return " + getter + "\n";
+
     if (IsString(vectortype)) {
       code += Indent + Indent + "return \"\"\n";
     } else {
@@ -1267,6 +1283,9 @@ class PythonGenerator : public BaseGenerator {
           size_t array_cnt = index + (IsArray(field_type) ? 1 : 0);
           for (size_t i = 0; in_array && i < array_cnt; i++) {
             code += "[_idx" + NumToString(i) + "-1]";
+          }
+          if (IsEnum(field_type) || IsEnum(field_type.VectorType())) {
+            code += ".value";
           }
           code += ")\n";
         }
@@ -1700,7 +1719,13 @@ class PythonGenerator : public BaseGenerator {
       return "[]";
     } else if (IsArray(field.value.type)) {
       const auto nested_type = field.value.type.VectorType();
-      if (IsScalar(nested_type.base_type)) {
+      if (IsEnum(nested_type)) {
+        return "[" + field.value.type.enum_def->name + "(" +
+               std::to_string(
+                   field.value.type.enum_def->MinValue()->GetAsInt64()) +
+               ")] * " + NumToString(field.value.type.fixed_length);
+
+      } else if (IsScalar(nested_type.base_type)) {
         const auto field_type =
             GetBasePythonTypeForScalarAndString(nested_type.base_type);
         return "[" + field_type + "()] * " +
@@ -1716,7 +1741,7 @@ class PythonGenerator : public BaseGenerator {
     } else if (IsEnum(field.value.type)) {
       return field.value.type.enum_def->name + "(" +
              std::to_string(
-                 field.value.type.enum_def->MinValue()->GetAsUInt64()) +
+                 field.value.type.enum_def->MinValue()->GetAsInt64()) +
              ")";
     } else if (IsBool(base_type)) {
       return field.value.constant == "0" ? "False" : "True";
@@ -1824,7 +1849,7 @@ class PythonGenerator : public BaseGenerator {
       // Determines field type, default value, and typing imports.
       auto base_type = field.value.type.base_type;
       std::string field_type;
-      if (IsEnum(field.value.type)) {
+      if (IsEnum(field.value.type) || IsEnum(field.value.type.VectorType())) {
         field_type = field.value.type.enum_def->name;
       } else {
         switch (base_type) {
@@ -2190,12 +2215,14 @@ class PythonGenerator : public BaseGenerator {
       return;
     }
 
-    if (parser_.opts.python_gen_numpy) {
+    if (parser_.opts.python_gen_numpy &&
+        !IsEnum(field.value.type.VectorType())) {
       code += GenIndents(3) + "if np is None:";
       GenUnpackforScalarVectorHelper(struct_def, field, code_ptr, 4);
 
       // If numpy exists, use the AsNumpy method to optimize the unpack speed.
       code += GenIndents(3) + "else:";
+
       code += GenIndents(4) + "self." + field_field + " = " + struct_var + "." +
               field_method + "_as_numpy()";
     } else {
@@ -2407,7 +2434,11 @@ class PythonGenerator : public BaseGenerator {
                      " = builder.CreateNumpyVector(self." + field_field + ")";
       code_prefix += GenIndents(3) + "else:";
       GenPackForScalarVectorFieldHelper(struct_def, field, code_prefix_ptr, 4);
-      code_prefix += "(self." + field_field + "[i])";
+      if (IsEnum(field.value.type.VectorType())) {
+        code_prefix += "(self." + field_field + "[i].value)";
+      } else {
+        code_prefix += "(self." + field_field + "[i])";
+      }
       code_prefix += GenIndents(4) + field_field + " = builder.EndVector()";
     } else {
       GenPackForScalarVectorFieldHelper(struct_def, field, code_prefix_ptr, 3);
