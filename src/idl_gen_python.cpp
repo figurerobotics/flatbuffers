@@ -260,6 +260,8 @@ class PythonGenerator : public BaseGenerator {
       default_value = "None";
     } else if (is_bool) {
       default_value = field.value.constant == "0" ? "False" : "True";
+    } else if (IsEnum(field.value.type)) {
+      default_value = field.value.type.enum_def->name + "(" + field.value.constant + ")";
     } else {
       default_value = IsFloat(field.value.type.base_type)
                           ? float_const_gen_.GenFloatConstant(field)
@@ -1180,7 +1182,7 @@ class PythonGenerator : public BaseGenerator {
     } else if (IsArray(field.value.type)) {
       const auto nested_type = field.value.type.VectorType();
       if (IsEnum(nested_type)) {
-        return "[" + field.value.type.enum_def->name + "(" + std::to_string(field.value.type.enum_def->MinValue()->GetAsInt64()) + ")] * " + NumToString(field.value.type.fixed_length);
+        return "[" + field.value.type.enum_def->name + "(" + field.value.constant + ")] * " + NumToString(field.value.type.fixed_length);
 
       } else if (IsScalar(nested_type.base_type)) {
 	      const auto field_type = GetBasePythonTypeForScalarAndString(nested_type.base_type);
@@ -1193,7 +1195,7 @@ class PythonGenerator : public BaseGenerator {
     } else if (field.IsScalarOptional()) {
       return "None";
     } else if (IsEnum(field.value.type)) {
-      return field.value.type.enum_def->name + "(" + std::to_string(field.value.type.enum_def->MinValue()->GetAsInt64()) + ")";
+      return field.value.type.enum_def->name + "(" + field.value.constant + ")";
     } else if (IsBool(base_type)) {
       return field.value.constant == "0" ? "False" : "True";
     } else if (IsFloat(base_type)) {
