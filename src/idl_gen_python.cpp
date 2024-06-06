@@ -780,6 +780,9 @@ class PythonGenerator : public BaseGenerator {
       default_value = "None";
     } else if (is_bool) {
       default_value = field.value.constant == "0" ? "False" : "True";
+    } else if (IsEnum(field.value.type)) {
+      default_value =
+          field.value.type.enum_def->name + "(" + field.value.constant + ")";
     } else {
       default_value = IsFloat(field.value.type.base_type)
                           ? float_const_gen_.GenFloatConstant(field)
@@ -1721,9 +1724,8 @@ class PythonGenerator : public BaseGenerator {
       const auto nested_type = field.value.type.VectorType();
       if (IsEnum(nested_type)) {
         return "[" + field.value.type.enum_def->name + "(" +
-               std::to_string(
-                   field.value.type.enum_def->MinValue()->GetAsInt64()) +
-               ")] * " + NumToString(field.value.type.fixed_length);
+               field.value.constant + ")] * " +
+               NumToString(field.value.type.fixed_length);
 
       } else if (IsScalar(nested_type.base_type)) {
         const auto field_type =
@@ -1739,10 +1741,7 @@ class PythonGenerator : public BaseGenerator {
     } else if (field.IsScalarOptional()) {
       return "None";
     } else if (IsEnum(field.value.type)) {
-      return field.value.type.enum_def->name + "(" +
-             std::to_string(
-                 field.value.type.enum_def->MinValue()->GetAsInt64()) +
-             ")";
+      return field.value.type.enum_def->name + "(" + field.value.constant + ")";
     } else if (IsBool(base_type)) {
       return field.value.constant == "0" ? "False" : "True";
     } else if (IsFloat(base_type)) {
@@ -1851,7 +1850,7 @@ class PythonGenerator : public BaseGenerator {
       std::string field_type;
       if (IsEnum(field.value.type) || IsEnum(field.value.type.VectorType())) {
         field_type = field.value.type.enum_def->name;
-        if (IsArray(field.value.type) || IsVector(field.value.type)){
+        if (IsArray(field.value.type) || IsVector(field.value.type)) {
           field_type = "List[" + field_type + "]";
         }
       } else {
