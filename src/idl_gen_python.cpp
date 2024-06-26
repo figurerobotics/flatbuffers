@@ -2675,6 +2675,12 @@ class PythonGenerator : public BaseGenerator {
       GenComment(ev.doc_comment, code_ptr, &def_comment, Indent.c_str());
       EnumMember(enum_def, ev, code_ptr);
     }
+
+    if (enum_def.attributes.Lookup("bit_flags")) {
+      auto &code = *code_ptr;
+      code += Indent + "NONE = 0\n";
+      code += Indent + "ANY = " + enum_def.AllFlags() + "\n";
+    }
   }
 
   // Returns the function name that is able to read a value of the given type.
