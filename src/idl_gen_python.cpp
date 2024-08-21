@@ -434,8 +434,10 @@ class PythonGenerator : public BaseGenerator {
       import_entry = ImportMapEntry{ "flatbuffers.table", "Table" };
     } else {
       return_type = TypeName(field);
-      import_entry = ImportMapEntry{ GenPackageReference(field.value.type),
+      if (!parser_.opts.one_file) {
+        import_entry = ImportMapEntry{ GenPackageReference(field.value.type),
                                      TypeName(field) };
+      }
     }
 
 
@@ -473,8 +475,10 @@ class PythonGenerator : public BaseGenerator {
       import_entry = ImportMapEntry{ "flatbuffers.table", "Table" };
     } else {
       return_ty = TypeName(field);
-      import_entry = ImportMapEntry{ GenPackageReference(field.value.type),
+      if (!parser_.opts.one_file) {
+        import_entry = ImportMapEntry{ GenPackageReference(field.value.type),
                                      TypeName(field) };
+      }
     }
 
     code += namer_.Method(field) + "(self)";
@@ -533,7 +537,9 @@ class PythonGenerator : public BaseGenerator {
       }
       code += "(self) -> Generator[" + return_type + ", None, None]:";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) {
+        imports.insert(import_entry);
+      }
     } else {
       code += "(self):";
     }
@@ -2462,7 +2468,7 @@ class PythonGenerator : public BaseGenerator {
   // Begin by declaring namespace and imports.
   void BeginFile(const std::string &name_space_name, const bool needs_imports,
                  std::string *code_ptr, const std::string &mod,
-                 const ImportMap&) const {
+                 const ImportMap& imports) const {
     auto &code = *code_ptr;
     code = code + "# " + FlatBuffersGeneratedWarning() + "\n\n";
     code += "# namespace: " + name_space_name + "\n\n";
