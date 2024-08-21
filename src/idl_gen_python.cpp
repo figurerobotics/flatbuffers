@@ -104,7 +104,9 @@ class PythonGenerator : public BaseGenerator {
   }
 
   // Begin enum code with a class declaration.
-  void BeginEnum(const EnumDef &enum_def, std::string *code_ptr) const {
+  void BeginEnum(const EnumDef &enum_def, std::string *code_ptr, ImportMap &one_file_imports) const {
+
+    one_file_imports.insert(ImportMapEntry{ "enum", "Enum" });
     auto &code = *code_ptr;
     code += "class " + namer_.Type(enum_def) + "(Enum):\n";
   }
@@ -282,8 +284,9 @@ class PythonGenerator : public BaseGenerator {
       const std::string return_type = ReturnType(struct_def, field);
       code += "(self, i: int)";
       code += " -> " + return_type + ":";
-
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) {
+        imports.insert(import_entry);
+      }
     } else {
       code += "(self, i):";
     }
@@ -344,7 +347,9 @@ class PythonGenerator : public BaseGenerator {
       const std::string return_type = ReturnType(struct_def, field);
       code += " -> Optional[" + return_type + "]";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) {
+        imports.insert(import_entry);
+      }
     }
     code += ":";
     code += OffsetPrefix(field);
@@ -412,7 +417,9 @@ class PythonGenerator : public BaseGenerator {
     if (parser_.opts.python_typing) {
       code += "(self, j: int) -> Optional[" + return_type + "]";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) {
+        imports.insert(import_entry);
+      }
     } else {
       code += "(self, j)";
     }
@@ -449,7 +456,9 @@ class PythonGenerator : public BaseGenerator {
     if (parser_.opts.python_typing) {
       code += " -> Optional[" + return_ty + "]";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) {
+        imports.insert(import_entry);
+      }
     }
     code += ":";
     code += OffsetPrefix(field);
@@ -494,7 +503,9 @@ class PythonGenerator : public BaseGenerator {
       const std::string return_type = ReturnType(struct_def, field);
       code += "(self, j: int) -> Optional[" + return_type + "]";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) {
+        imports.insert(import_entry);
+      }
     } else {
       code += "(self, j)";
     }
@@ -620,7 +631,9 @@ class PythonGenerator : public BaseGenerator {
     if (parser_.opts.python_typing) {
       code += " -> Union[" + unqualified_name + ", int]";
       imports.insert(ImportMapEntry{ "typing", "Union" });
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) {
+        imports.insert(import_entry);
+      }
     }
     code += ":";
 
@@ -1749,7 +1762,7 @@ class PythonGenerator : public BaseGenerator {
   void GenPackForStruct(const StructDef &struct_def,
                         std::string *code_ptr) const {
     auto &code = *code_ptr;
-    const auto struct_fn = namer_.Function(struct_def);
+    const auto struct_fn = namer_.Type(struct_def);
 
     GenReceiverForObjectAPI(struct_def, code_ptr);
     code += "pack(self, builder):";
@@ -2131,11 +2144,11 @@ class PythonGenerator : public BaseGenerator {
   }
 
   // Generate enum declarations.
-  void GenEnum(const EnumDef &enum_def, std::string *code_ptr) const {
+  void GenEnum(const EnumDef &enum_def, std::string *code_ptr,  ImportMap &one_file_imports) const {
     if (enum_def.generated) return;
 
     GenComment(enum_def.doc_comment, code_ptr, &def_comment);
-    BeginEnum(enum_def, code_ptr);
+    BeginEnum(enum_def, code_ptr, one_file_imports);
     for (auto it = enum_def.Vals().begin(); it != enum_def.Vals().end(); ++it) {
       auto &ev = **it;
       GenComment(ev.doc_comment, code_ptr, &def_comment, Indent.c_str());
@@ -2259,7 +2272,7 @@ class PythonGenerator : public BaseGenerator {
   bool generate() {
     std::string one_file_code;
     ImportMap one_file_imports;
-    if (!generateEnums(&one_file_code)) return false;
+    if (!generateEnums(&one_file_code, one_file_imports)) return false;
     if (!generateStructs(&one_file_code, one_file_imports)) return false;
 
     if (parser_.opts.one_file) {
@@ -2274,26 +2287,27 @@ class PythonGenerator : public BaseGenerator {
   }
 
  private:
-  bool generateEnums(std::string *one_file_code) const {
+  bool generateEnums(std::string *one_file_code, ImportMap &one_file_imports) const {
     for (auto it = parser_.enums_.vec.begin(); it != parser_.enums_.vec.end();
          ++it) {
       auto &enum_def = **it;
       std::string enumcode;
-      GenEnum(enum_def, &enumcode);
+      ImportMap imports;
+      GenEnum(enum_def, &enumcode, imports);
       if (parser_.opts.generate_object_based_api & enum_def.is_union) {
         GenUnionCreator(enum_def, &enumcode);
       }
 
       if (parser_.opts.one_file && !enumcode.empty()) {
         *one_file_code += enumcode + "\n\n";
+        for (auto import_str : imports) { one_file_imports.insert(import_str); }
       } else {
-        ImportMap imports;
         const std::string mod =
             namer_.File(enum_def, SkipFile::SuffixAndExtension);
 
         if (!SaveType(namer_.File(enum_def, SkipFile::Suffix),
                       *enum_def.defined_namespace, enumcode, imports, mod,
-                      false))
+                      true))
           return false;
       }
     }
@@ -2340,10 +2354,12 @@ class PythonGenerator : public BaseGenerator {
       const std::string local_import = "." + mod;
 
       code += "import flatbuffers\n";
-      code += "from enum import Enum\n";
       code += "from flatbuffers.compat import import_numpy\n";
       if (parser_.opts.python_typing) {
         code += "from typing import Any, Optional\n";
+      }
+      for (const auto& import : imports) {
+        code += "from " + import.first + " import " + import.second + "\n";
       }
       code += "np = import_numpy()\n\n";
     }
