@@ -950,8 +950,10 @@ class PythonGenerator : public BaseGenerator {
       import_entry = ImportMapEntry{ "flatbuffers.table", "Table" };
     } else {
       return_type = TypeName(field);
-      import_entry = ImportMapEntry{ GenPackageReference(field.value.type),
-                                     TypeName(field) };
+      if (!parser_.opts.one_file) {
+        import_entry = ImportMapEntry{ GenPackageReference(field.value.type),
+                                       TypeName(field) };
+      }
     }
 
     if (parser_.opts.python_typing) {
@@ -986,8 +988,10 @@ class PythonGenerator : public BaseGenerator {
       import_entry = ImportMapEntry{ "flatbuffers.table", "Table" };
     } else {
       return_ty = TypeName(field);
-      import_entry = ImportMapEntry{ GenPackageReference(field.value.type),
-                                     TypeName(field) };
+      if (!parser_.opts.one_file) {
+        import_entry = ImportMapEntry{ GenPackageReference(field.value.type),
+                                       TypeName(field) };
+      }
     }
 
     code += namer_.Method(field) + "(self)";
@@ -1053,7 +1057,7 @@ class PythonGenerator : public BaseGenerator {
       }
       code += "(self) -> Generator[" + return_type + ", None, None]:";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) { imports.insert(import_entry); }
     } else {
       code += "(self):";
     }
