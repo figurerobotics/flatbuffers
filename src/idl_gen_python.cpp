@@ -621,7 +621,9 @@ class PythonGenerator : public BaseGenerator {
   }
 
   // Begin enum code with a class declaration.
-  void BeginEnum(const EnumDef &enum_def, std::string *code_ptr) const {
+  void BeginEnum(const EnumDef &enum_def, std::string *code_ptr,
+                 ImportMap &one_file_imports) const {
+    one_file_imports.insert(ImportMapEntry{ "enum", "Enum" });
     auto &code = *code_ptr;
     code += "class " + namer_.Type(enum_def) + "(Enum):\n";
   }
@@ -824,8 +826,7 @@ class PythonGenerator : public BaseGenerator {
       const std::string return_type = ReturnType(struct_def, field);
       code += "_get(self, i: int)";
       code += " -> " + return_type + ":";
-
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) { imports.insert(import_entry); }
     } else {
       code += "(self, i):";
     }
@@ -889,7 +890,7 @@ class PythonGenerator : public BaseGenerator {
       const std::string return_type = ReturnType(struct_def, field);
       code += " -> Optional[" + return_type + "]";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) { imports.insert(import_entry); }
     }
     code += ":";
     code += OffsetPrefix(field);
@@ -932,10 +933,10 @@ class PythonGenerator : public BaseGenerator {
     code += Indent + Indent + "return None\n\n";
   }
 
-    // Get the value of a vector's struct member.
+  // Get the value of a vector's struct member.
   void GetMemberOfVectorOfUnion(const StructDef &struct_def,
-                                 const FieldDef &field, std::string *code_ptr,
-                                 ImportMap &imports) const {
+                                const FieldDef &field, std::string *code_ptr,
+                                ImportMap &imports) const {
     auto &code = *code_ptr;
     auto vectortype = field.value.type.VectorType();
     GenReceiver(struct_def, code_ptr);
@@ -953,11 +954,10 @@ class PythonGenerator : public BaseGenerator {
                                      TypeName(field) };
     }
 
-
     if (parser_.opts.python_typing) {
       code += "(self, j: int) -> Optional[" + return_type + "]";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) { imports.insert(import_entry); }
     } else {
       code += "(self, j)";
     }
@@ -966,12 +966,12 @@ class PythonGenerator : public BaseGenerator {
     code += Indent + Indent + Indent;
     code += "x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * ";
     code += NumToString(InlineSize(vectortype)) + "\n";
-    code += Indent + Indent + Indent + "obj = flatbuffers.table.Table(bytearray(), 0)\n";
+    code += Indent + Indent + Indent +
+            "obj = flatbuffers.table.Table(bytearray(), 0)\n";
     code += Indent + Indent + Indent + GenGetter(field.value.type);
     code += "obj, x)\n" + Indent + Indent + Indent + "return obj\n";
     code += Indent + Indent + "return None\n\n";
   }
-
 
   // Get the value of a union from an object.
   void GetUnionField(const StructDef &struct_def, const FieldDef &field,
@@ -994,7 +994,7 @@ class PythonGenerator : public BaseGenerator {
     if (parser_.opts.python_typing) {
       code += " -> Optional[" + return_ty + "]";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) { imports.insert(import_entry); }
     }
     code += ":";
     code += OffsetPrefix(field);
@@ -1077,7 +1077,7 @@ class PythonGenerator : public BaseGenerator {
       const std::string return_type = ReturnType(struct_def, field);
       code += "_get(self, j: int) -> Optional[" + return_type + "]";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) { imports.insert(import_entry); }
     } else {
       code += "_get(self, j)";
     }
@@ -1209,7 +1209,7 @@ class PythonGenerator : public BaseGenerator {
     if (parser_.opts.python_typing) {
       code += " -> Union[" + unqualified_name + ", int]";
       imports.insert(ImportMapEntry{ "typing", "Union" });
-      imports.insert(import_entry);
+      if (!parser_.opts.one_file) { imports.insert(import_entry); }
     }
     code += ":";
 
@@ -1582,7 +1582,7 @@ class PythonGenerator : public BaseGenerator {
           if (vectortype.base_type == BASE_TYPE_STRUCT) {
             GenVectorGenerator(struct_def, field, code_ptr, imports);
             GetMemberOfVectorOfStruct(struct_def, field, code_ptr, imports);
-          } else  if (vectortype.base_type == BASE_TYPE_UNION) {
+          } else if (vectortype.base_type == BASE_TYPE_UNION) {
             GetMemberOfVectorOfUnion(struct_def, field, code_ptr, imports);
           } else {
             GenVectorGenerator(struct_def, field, code_ptr, imports);
@@ -1881,7 +1881,7 @@ class PythonGenerator : public BaseGenerator {
       std::string separator_string = ", ";
       auto enum_def = field.value.type.enum_def;
       for (auto it = enum_def->Vals().begin(); it != enum_def->Vals().end();
-          ++it) {
+           ++it) {
         auto &ev = **it;
         // Union only supports string and table.
         std::string union_field_type;
@@ -2200,8 +2200,9 @@ class PythonGenerator : public BaseGenerator {
             field_method + "())";
   }
 
-  void GenUnPackForUnionVector(const StructDef &struct_def, const FieldDef &field,
-                         std::string *code_ptr) const {
+  void GenUnPackForUnionVector(const StructDef &struct_def,
+                               const FieldDef &field,
+                               std::string *code_ptr) const {
     auto &code = *code_ptr;
     const auto field_field = namer_.Field(field);
     const auto field_method = namer_.Method(field);
@@ -2224,8 +2225,8 @@ class PythonGenerator : public BaseGenerator {
     code += GenIndents(5) + "self." + field_field + ".append(None)";
     code += GenIndents(4) + "else:";
     code += GenIndents(5) + "self." + field_field + ".append(" + union_type +
-            "Creator(" + "self." + field_field + "_type[i], " + struct_var + "." +
-            field_method + "(i)))";
+            "Creator(" + "self." + field_field + "_type[i], " + struct_var +
+            "." + field_method + "(i)))";
   }
 
   void GenUnPackForStructVector(const StructDef &struct_def,
@@ -2411,7 +2412,7 @@ class PythonGenerator : public BaseGenerator {
   void GenPackForStruct(const StructDef &struct_def,
                         std::string *code_ptr) const {
     auto &code = *code_ptr;
-    const auto struct_fn = namer_.Function(struct_def);
+    const auto struct_fn = namer_.Type(struct_def);
 
     GenReceiverForObjectAPI(struct_def, code_ptr);
     code += "pack(self, builder):";
@@ -2470,9 +2471,10 @@ class PythonGenerator : public BaseGenerator {
             field_field + ")";
   }
 
-  void GenPackForUnionVectorField(const StructDef &struct_def, const FieldDef &field,
-                            std::string *code_prefix_ptr,
-                            std::string *code_ptr) const {
+  void GenPackForUnionVectorField(const StructDef &struct_def,
+                                  const FieldDef &field,
+                                  std::string *code_prefix_ptr,
+                                  std::string *code_ptr) const {
     auto &code_prefix = *code_prefix_ptr;
     auto &code = *code_ptr;
     const auto field_field = namer_.Field(field);
@@ -2485,20 +2487,19 @@ class PythonGenerator : public BaseGenerator {
     code_prefix += GenIndents(3);
     code_prefix += "for i in range(len(self." + field_field + ")):";
     code_prefix += GenIndents(4) + field_field + "list.append(self." +
-                    field_field + "[i].pack(builder))";
+                   field_field + "[i].pack(builder))";
 
     code_prefix += GenIndents(3) + struct_type + "Start" + field_method +
-                    "Vector(builder, len(self." + field_field + "))";
+                   "Vector(builder, len(self." + field_field + "))";
     code_prefix += GenIndents(3) + "for i in reversed(range(len(self." +
-                    field_field + "))):";
+                   field_field + "))):";
     code_prefix += GenIndents(4) + "builder.PrependUOffsetTRelative" + "(" +
-                    field_field + "list[i])";
+                   field_field + "list[i])";
     code_prefix += GenIndents(3) + field_field + " = builder.EndVector()";
     code += GenIndents(2) + "if self." + field_field + " is not None:";
     code += GenIndents(3) + struct_type + "Add" + field_method + "(builder, " +
             field_field + ")";
   }
-
 
   void GenPackForScalarVectorFieldHelper(const StructDef &struct_def,
                                          const FieldDef &field,
@@ -2807,11 +2808,12 @@ class PythonGenerator : public BaseGenerator {
   }
 
   // Generate enum declarations.
-  void GenEnum(const EnumDef &enum_def, std::string *code_ptr) const {
+  void GenEnum(const EnumDef &enum_def, std::string *code_ptr,
+               ImportMap &one_file_imports) const {
     if (enum_def.generated) return;
 
     GenComment(enum_def.doc_comment, code_ptr, &def_comment);
-    BeginEnum(enum_def, code_ptr);
+    BeginEnum(enum_def, code_ptr, one_file_imports);
     for (auto it = enum_def.Vals().begin(); it != enum_def.Vals().end(); ++it) {
       auto &ev = **it;
       GenComment(ev.doc_comment, code_ptr, &def_comment, Indent.c_str());
@@ -2944,7 +2946,7 @@ class PythonGenerator : public BaseGenerator {
   bool generate() {
     std::string one_file_code;
     ImportMap one_file_imports;
-    if (!generateEnums(&one_file_code)) return false;
+    if (!generateEnums(&one_file_code, one_file_imports)) return false;
     if (!generateStructs(&one_file_code, one_file_imports)) return false;
 
     if (parser_.opts.one_file) {
@@ -2959,26 +2961,28 @@ class PythonGenerator : public BaseGenerator {
   }
 
  private:
-  bool generateEnums(std::string *one_file_code) const {
+  bool generateEnums(std::string *one_file_code,
+                     ImportMap &one_file_imports) const {
     for (auto it = parser_.enums_.vec.begin(); it != parser_.enums_.vec.end();
          ++it) {
       auto &enum_def = **it;
       std::string enumcode;
-      GenEnum(enum_def, &enumcode);
+      ImportMap imports;
+      GenEnum(enum_def, &enumcode, imports);
       if (parser_.opts.generate_object_based_api & enum_def.is_union) {
         GenUnionCreator(enum_def, &enumcode);
       }
 
       if (parser_.opts.one_file && !enumcode.empty()) {
         *one_file_code += enumcode + "\n\n";
+        for (auto import_str : imports) { one_file_imports.insert(import_str); }
       } else {
-        ImportMap imports;
         const std::string mod =
             namer_.File(enum_def, SkipFile::SuffixAndExtension);
 
         if (!SaveType(namer_.File(enum_def, SkipFile::Suffix),
                       *enum_def.defined_namespace, enumcode, imports, mod,
-                      false))
+                      true))
           return false;
       }
     }
@@ -3016,7 +3020,7 @@ class PythonGenerator : public BaseGenerator {
   // Begin by declaring namespace and imports.
   void BeginFile(const std::string &name_space_name, const bool needs_imports,
                  std::string *code_ptr, const std::string &mod,
-                 const ImportMap &) const {
+                 const ImportMap &imports) const {
     auto &code = *code_ptr;
     code = code + "# " + FlatBuffersGeneratedWarning() + "\n\n";
     code += "# namespace: " + name_space_name + "\n\n";
@@ -3028,9 +3032,11 @@ class PythonGenerator : public BaseGenerator {
       if (parser_.opts.python_gen_numpy) {
         code += "from flatbuffers.compat import import_numpy\n";
       }
-      code += "from enum import Enum\n";
       if (parser_.opts.python_typing) {
         code += "from typing import Any, Optional, Generator\n";
+      }
+      for (const auto &import : imports) {
+        code += "from " + import.first + " import " + import.second + "\n";
       }
       if (parser_.opts.python_gen_numpy) { code += "np = import_numpy()\n\n"; }
     }
