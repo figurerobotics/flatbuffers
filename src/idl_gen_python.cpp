@@ -605,10 +605,10 @@ class PythonGenerator : public BaseGenerator {
   // Most field accessors need to retrieve and test the field offset first,
   // this is the prefix code for that.
   std::string OffsetPrefix(const FieldDef &field, bool new_line = true) const {
-    return "\n" + Indent + Indent +
+    return GenIndents(2) +
            "o = flatbuffers.number_types.UOffsetTFlags.py_type" +
-           "(self._tab.Offset(" + NumToString(field.value.offset) + "))\n" +
-           Indent + Indent + "if o != 0:" + (new_line ? "\n" : "");
+           "(self._tab.Offset(" + NumToString(field.value.offset) + "))" +
+           GenIndents(2) + "if o != 0:" + (new_line ? "\n" : "");
   }
 
   // Begin a class declaration.
@@ -933,6 +933,20 @@ class PythonGenerator : public BaseGenerator {
     code += Indent + Indent + "return None\n\n";
   }
 
+  std::string GenUnionType(const Type &type, uint8_t indents,
+                           std::string var_name = "obj") const {
+    std::string code;
+    assert(type.enum_def->is_union);
+    code += GenIndents(indents) + "obj = None";
+    for (auto val : type.enum_def->Vals()) {
+      if (val->name == "NONE") continue;
+      code += GenIndents(indents) + "if type == " + type.enum_def->name + "." +
+              val->name + " : ";
+      code += GenIndents(indents + 1) + "obj = " + val->name + "()";
+    }
+    return code;
+  }
+
   // Get the value of a vector's struct member.
   void GetMemberOfVectorOfUnion(const StructDef &struct_def,
                                 const FieldDef &field, std::string *code_ptr,
@@ -942,7 +956,6 @@ class PythonGenerator : public BaseGenerator {
     GenReceiver(struct_def, code_ptr);
     std::string return_type = "flatbuffers.table.Table";
 
-    // bool is_native_table = vectortype.base_type == "*flatbuffers.Table";
     code += namer_.Method(field);
     bool is_native_table = TypeName(field) == "*flatbuffers.Table";
     ImportMapEntry import_entry;
@@ -957,22 +970,25 @@ class PythonGenerator : public BaseGenerator {
     }
 
     if (parser_.opts.python_typing) {
-      code += "(self, j: int) -> Optional[" + return_type + "]";
+      code += "_get(self, j: int)";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
       if (!parser_.opts.one_file) { imports.insert(import_entry); }
     } else {
       code += "(self, j)";
     }
     code += ":" + OffsetPrefix(field);
-    code += Indent + Indent + Indent + "x = self._tab.Vector(o)\n";
-    code += Indent + Indent + Indent;
-    code += "x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * ";
-    code += NumToString(InlineSize(vectortype)) + "\n";
-    code += Indent + Indent + Indent +
-            "obj = flatbuffers.table.Table(bytearray(), 0)\n";
-    code += Indent + Indent + Indent + GenGetter(field.value.type);
-    code += "obj, x)\n" + Indent + Indent + Indent + "return obj\n";
-    code += Indent + Indent + "return None\n\n";
+    code += GenIndents(3) + "x = self._tab.Vector(o)";
+    code += GenIndents(3);
+    code += "x += flatbuffers.number_types.UOffsetTFlags.py_type(j * ";
+    code += NumToString(InlineSize(vectortype)) + ")";
+    code += GenIndents(3) + "x = self._tab.Indirect(x)";
+    code +=
+        GenIndents(3) + "type = self." + namer_.Method(field) + "_type_get(j)";
+    code += GenUnionType(vectortype, 3);
+    code += GenIndents(3) + "if obj:";
+    code += GenIndents(4) + "obj.init(self._tab.Bytes, x)";
+    code += GenIndents(3) + "return obj";
+    code += GenIndents(2) + "return None\n\n";
   }
 
   // Get the value of a union from an object.
@@ -995,24 +1011,20 @@ class PythonGenerator : public BaseGenerator {
     }
 
     code += namer_.Method(field) + "(self)";
-    if (parser_.opts.python_typing) {
-      code += " -> Optional[" + return_ty + "]";
-      imports.insert(ImportMapEntry{ "typing", "Optional" });
-      if (!parser_.opts.one_file) { imports.insert(import_entry); }
-    }
     code += ":";
-    code += OffsetPrefix(field);
+    code += OffsetPrefix(field, false);
 
     if (!parser_.opts.python_typing) {
-      code += Indent + Indent + Indent;
-      code += "from " + import_entry.first + " import " + import_entry.second +
-              "\n";
+      code += GenIndents(3);
+      code += "from " + import_entry.first + " import " + import_entry.second;
     }
-    code += Indent + Indent + Indent +
-            "obj = flatbuffers.table.Table(bytearray(), 0)\n";
-    code += Indent + Indent + Indent + GenGetter(field.value.type);
-    code += "obj, o)\n" + Indent + Indent + Indent + "return obj\n";
-    code += Indent + Indent + "return None\n\n";
+    code += GenIndents(3) + "obj = flatbuffers.table.Table(bytearray(), 0)";
+    code += GenIndents(3) + GenGetter(field.value.type) + "obj, o)";
+    code += GenIndents(3) + "type = self." + namer_.Method(field) + "_type";
+    code += GenIndents(3) + "return " + field.value.type.enum_def->name +
+            "Creator(type, obj)";
+
+    code += GenIndents(2) + "return None\n\n";
   }
 
   template<typename T> std::string ModuleFor(const T *def) const {
@@ -1587,6 +1599,7 @@ class PythonGenerator : public BaseGenerator {
             GenVectorGenerator(struct_def, field, code_ptr, imports);
             GetMemberOfVectorOfStruct(struct_def, field, code_ptr, imports);
           } else if (vectortype.base_type == BASE_TYPE_UNION) {
+            GenVectorGenerator(struct_def, field, code_ptr, imports);
             GetMemberOfVectorOfUnion(struct_def, field, code_ptr, imports);
           } else {
             GenVectorGenerator(struct_def, field, code_ptr, imports);
@@ -2201,7 +2214,7 @@ class PythonGenerator : public BaseGenerator {
     }
     code += GenIndents(2) + "self." + field_field + " = " + union_type +
             "Creator(" + "self." + field_field + "_type, " + struct_var + "." +
-            field_method + "())";
+            field_method + ")";
   }
 
   void GenUnPackForUnionVector(const StructDef &struct_def,
@@ -2535,6 +2548,7 @@ class PythonGenerator : public BaseGenerator {
       case BASE_TYPE_FLOAT: type_name = "Float32"; break;
       case BASE_TYPE_DOUBLE: type_name = "Float64"; break;
       case BASE_TYPE_STRING: type_name = "UOffsetTRelative"; break;
+      case BASE_TYPE_UTYPE: type_name = "Uint8"; break;
       default: type_name = "VOffsetT"; break;
     }
     code += type_name;
@@ -2774,7 +2788,7 @@ class PythonGenerator : public BaseGenerator {
     const auto variant = namer_.Variant(ev);
 
     code +=
-        GenIndents(1) + "if unionType == " + union_type + "()." + variant + ":";
+        GenIndents(1) + "if unionType == " + union_type + "." + variant + ":";
     code +=
         GenIndents(2) + "tab = flatbuffers.table.Table(table.Bytes, table.Pos)";
     code += GenIndents(2) + "union = tab.String(table.Pos)";
