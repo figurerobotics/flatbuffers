@@ -974,6 +974,36 @@ class PythonGenerator : public BaseGenerator {
     code += GenIndents(3) + "return " + vectortype.enum_def->name +
             "Creator(type, obj)";
     code += GenIndents(2) + "return None\n\n";
+
+    code += GenIndents(1) + "def " + namer_.Method(field) + "_table";
+    if (is_native_table) {
+      import_entry = ImportMapEntry{ "flatbuffers.table", "Table" };
+    } else {
+      return_type = TypeName(field);
+      if (!parser_.opts.one_file) {
+        import_entry = ImportMapEntry{ GenPackageReference(field.value.type),
+                                       TypeName(field) };
+      }
+    }
+
+    if (parser_.opts.python_typing) {
+      code += "_get(self, j: int)";
+      imports.insert(ImportMapEntry{ "typing", "Optional" });
+      if (!parser_.opts.one_file) { imports.insert(import_entry); }
+    } else {
+      code += "(self, j)";
+    }
+    code += ":" + OffsetPrefix(field);
+    code += GenIndents(3) + "x = self._tab.Vector(o)";
+    code += GenIndents(3);
+    code += "x += flatbuffers.number_types.UOffsetTFlags.py_type(j * ";
+    code += NumToString(InlineSize(vectortype)) + ")";
+    code += GenIndents(3) + "x = self._tab.Indirect(x)";
+    code +=
+        GenIndents(3) + "type = self." + namer_.Method(field) + "_type_get(j)";
+    code += GenIndents(3) + "obj = flatbuffers.table.Table(self._tab.Bytes, x)";
+    code += GenIndents(3) + "return obj";
+    code += GenIndents(2) + "return None\n\n";
   }
 
   // Get the value of a union from an object.
@@ -1008,6 +1038,20 @@ class PythonGenerator : public BaseGenerator {
     code += GenIndents(3) + "type = self." + namer_.Method(field) + "_type";
     code += GenIndents(3) + "return " + field.value.type.enum_def->name +
             "Creator(type, obj)";
+
+    code += GenIndents(2) + "return None\n\n";
+
+    code += GenIndents(1) + "def " + namer_.Method(field) + "_table(self)";
+    code += ":";
+    code += OffsetPrefix(field, false);
+
+    if (!parser_.opts.python_typing) {
+      code += GenIndents(3);
+      code += "from " + import_entry.first + " import " + import_entry.second;
+    }
+    code += GenIndents(3) + "obj = flatbuffers.table.Table(bytearray(), 0)";
+    code += GenIndents(3) + GenGetter(field.value.type) + "obj, o)";
+    code += GenIndents(3) + "return obj";
 
     code += GenIndents(2) + "return None\n\n";
   }
@@ -2199,7 +2243,7 @@ class PythonGenerator : public BaseGenerator {
     }
     code += GenIndents(2) + "self." + field_field + " = " + union_type +
             "TCreator(" + "self." + field_field + "_type, " + struct_var + "." +
-            field_method + ")";
+            field_method + "_table())";
   }
 
   void GenUnPackForUnionVector(const StructDef &struct_def,
@@ -2223,12 +2267,12 @@ class PythonGenerator : public BaseGenerator {
       union_type = namer_.NamespacedType(enum_def) + "." + union_type;
     }
     code += GenIndents(4) + "if " + struct_var + "." + field_method +
-            "(i) is None:";
+            "_get(i) is None:";
     code += GenIndents(5) + "self." + field_field + ".append(None)";
     code += GenIndents(4) + "else:";
     code += GenIndents(5) + "self." + field_field + ".append(" + union_type +
-            "Creator(" + "self." + field_field + "_type[i], " + struct_var +
-            "." + field_method + "(i)))";
+            "TCreator(" + "self." + field_field + "_type[i], " + struct_var +
+            "." + field_method + "_table_get(i)))";
   }
 
   void GenUnPackForStructVector(const StructDef &struct_def,
