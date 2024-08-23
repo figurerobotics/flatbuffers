@@ -933,6 +933,25 @@ class PythonGenerator : public BaseGenerator {
     code += Indent + Indent + "return None\n\n";
   }
 
+  std::string GenUnionReturnTyping(const std::vector<EnumVal *> &type_vals,
+                                   bool add_none = true) const {
+    std::string return_type;
+    if (add_none) {
+      return_type += "Optional[ ";
+    } else {
+      return_type += "Union[";
+    }
+
+    for (auto val : type_vals) {
+      if (val->name == "NONE") continue;
+      return_type += val->name + " | ";
+    }
+    return_type.pop_back();
+    return_type.pop_back();
+    return_type += " ]";
+    return return_type;
+  }
+
   // Get the value of a vector's struct member.
   void GetMemberOfVectorOfUnion(const StructDef &struct_def,
                                 const FieldDef &field, std::string *code_ptr,
@@ -962,7 +981,9 @@ class PythonGenerator : public BaseGenerator {
     } else {
       code += "(self, j)";
     }
-    code += ":" + OffsetPrefix(field);
+    code +=
+        " -> " + GenUnionReturnTyping(field.value.type.enum_def->Vals()) + ":";
+    code += OffsetPrefix(field);
     code += GenIndents(3) + "x = self._tab.Vector(o)";
     code += GenIndents(3);
     code += "x += flatbuffers.number_types.UOffsetTFlags.py_type(j * ";
@@ -1026,7 +1047,8 @@ class PythonGenerator : public BaseGenerator {
     }
 
     code += namer_.Method(field) + "(self)";
-    code += ":";
+    code +=
+        " -> " + GenUnionReturnTyping(field.value.type.enum_def->Vals()) + ":";
     code += OffsetPrefix(field, false);
 
     if (!parser_.opts.python_typing) {
