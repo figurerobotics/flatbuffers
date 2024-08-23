@@ -417,17 +417,7 @@ class PythonGenerator : public BaseGenerator {
     code += Indent + Indent + "return None\n\n";
   }
 
-  std::string GenUnionType(const Type& type, uint8_t indents, std::string var_name="obj") const {
-    std::string code;
-    assert(type.enum_def->is_union);
-    code += GenIndents(indents) + "obj = None";
-    for( auto val : type.enum_def->Vals()) {
-      if (val->name == "NONE") continue;
-      code += GenIndents(indents) + "if type == " + type.enum_def->name + "." + val->name + " : ";
-      code += GenIndents(indents + 1) + "obj = " + val->name + "()";
-    }
-    return code;
-  }
+
 
     // Get the value of a vector's struct member.
   void GetMemberOfVectorOfUnion(const StructDef &struct_def,
@@ -468,10 +458,8 @@ class PythonGenerator : public BaseGenerator {
     code += NumToString(InlineSize(vectortype)) + ")";
     code += GenIndents(3) + "x = self._tab.Indirect(x)";
     code += GenIndents(3) + "type = self." + namer_.Method(field) + "_type_get(j)";
-    code += GenUnionType(vectortype, 3);
-    code += GenIndents(3) + "if obj:";
-    code += GenIndents(4) + "obj.init(self._tab.Bytes, x)";
-    code += GenIndents(3) + "return obj";
+    code += GenIndents(3) + "obj = flatbuffers.table.Table(self._tab.Bytes, x)";
+    code += GenIndents(3) + "return " + vectortype.enum_def->name + "Creator(type, obj)";
     code += GenIndents(2) + "return None\n\n";
   }
 
@@ -1670,7 +1658,7 @@ class PythonGenerator : public BaseGenerator {
       union_type = namer_.NamespacedType(enum_def) + "." + union_type;
     }
     code += GenIndents(2) + "self." + field_field + " = " + union_type +
-            "Creator(" + "self." + field_field + "_type, " + struct_var + "." +
+            "TCreator(" + "self." + field_field + "_type, " + struct_var + "." +
             field_method + ")";
   }
 
@@ -2227,6 +2215,37 @@ class PythonGenerator : public BaseGenerator {
             ".init_from_buf(table.Bytes, table.Pos)";
   }
 
+  std::string GenUnionType(const Type& type, uint8_t indents, std::string var_name="obj") const {
+    std::string code;
+    assert(type.enum_def->is_union);
+    code += GenIndents(indents) + "obj = None";
+    for( auto val : type.enum_def->Vals()) {
+      if (val->name == "NONE") continue;
+      code += GenIndents(indents) + "if type == " + type.enum_def->name + "." + val->name + " : ";
+      code += GenIndents(indents + 1) + "obj = " + val->name + "()";
+    }
+    return code;
+  }
+
+  void GenUnionCreatorForTable(const EnumDef &enum_def, const EnumVal &ev,
+                                std::string *code_ptr) const {
+    auto &code = *code_ptr;
+    const auto union_type = namer_.Type(enum_def);
+    const auto variant = namer_.Variant(ev);
+    auto field_type = namer_.ObjectType(*ev.union_type.struct_def);
+
+    code +=
+        GenIndents(1) + "if unionType == " + union_type + "." + variant + ":";
+    if (parser_.opts.include_dependence_headers) {
+      auto package_reference = GenPackageReference(ev.union_type);
+      code += GenIndents(2) + "import " + package_reference;
+      field_type = package_reference + "." + field_type;
+    }
+    code += GenIndents(2) + "obj = " + variant + "()";
+    code += GenIndents(2) + "obj.init(table.Bytes, table.Pos)";
+    code += GenIndents(2) + "return obj";
+  }
+
   void GenUnionCreatorForString(const EnumDef &enum_def, const EnumVal &ev,
                                 std::string *code_ptr) const {
     auto &code = *code_ptr;
@@ -2248,7 +2267,7 @@ class PythonGenerator : public BaseGenerator {
     const auto enum_fn = namer_.Type(enum_def);
 
     code += "\n";
-    code += "def " + enum_fn + "Creator(unionType, table):";
+    code += "def " + enum_fn + "TCreator(unionType, table):";
     code += GenIndents(1) + "from flatbuffers.table import Table";
     code += GenIndents(1) + "if not isinstance(table, Table):";
     code += GenIndents(2) + "return None";
@@ -2259,6 +2278,28 @@ class PythonGenerator : public BaseGenerator {
       switch (ev.union_type.base_type) {
         case BASE_TYPE_STRUCT:
           GenUnionCreatorForStruct(enum_def, ev, &code);
+          break;
+        case BASE_TYPE_STRING:
+          GenUnionCreatorForString(enum_def, ev, &code);
+          break;
+        default: break;
+      }
+    }
+    code += GenIndents(1) + "return None";
+    code += "\n";
+
+        code += "\n";
+    code += "def " + enum_fn + "Creator(unionType, table):";
+    code += GenIndents(1) + "from flatbuffers.table import Table";
+    code += GenIndents(1) + "if not isinstance(table, Table):";
+    code += GenIndents(2) + "return None";
+
+    for (auto it = enum_def.Vals().begin(); it != enum_def.Vals().end(); ++it) {
+      auto &ev = **it;
+      // Union only supports string and table.
+      switch (ev.union_type.base_type) {
+        case BASE_TYPE_STRUCT:
+          GenUnionCreatorForTable(enum_def, ev, &code);
           break;
         case BASE_TYPE_STRING:
           GenUnionCreatorForString(enum_def, ev, &code);
