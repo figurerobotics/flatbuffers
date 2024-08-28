@@ -975,14 +975,12 @@ class PythonGenerator : public BaseGenerator {
     }
 
     if (parser_.opts.python_typing) {
-      code += "_get(self, j: int)";
+      code += "_get(self, j: int):";
       imports.insert(ImportMapEntry{ "typing", "Optional" });
       if (!parser_.opts.one_file) { imports.insert(import_entry); }
     } else {
-      code += "(self, j)";
+      code += "(self, j):";
     }
-    code +=
-        " -> " + GenUnionReturnTyping(field.value.type.enum_def->Vals()) + ":";
     code += OffsetPrefix(field);
     code += GenIndents(3) + "x = self._tab.Vector(o)";
     code += GenIndents(3);
@@ -1046,9 +1044,7 @@ class PythonGenerator : public BaseGenerator {
       }
     }
 
-    code += namer_.Method(field) + "(self)";
-    code +=
-        " -> " + GenUnionReturnTyping(field.value.type.enum_def->Vals()) + ":";
+    code += namer_.Method(field) + "(self):";
     code += OffsetPrefix(field, false);
 
     if (!parser_.opts.python_typing) {
@@ -1677,9 +1673,7 @@ class PythonGenerator : public BaseGenerator {
           }
           break;
         }
-        case BASE_TYPE_UNION:
-          GetUnionField(struct_def, field, code_ptr);
-          break;
+        case BASE_TYPE_UNION: GetUnionField(struct_def, field, code_ptr); break;
         default: FLATBUFFERS_ASSERT(0);
       }
     }
