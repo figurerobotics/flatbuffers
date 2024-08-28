@@ -2836,12 +2836,12 @@ class PythonGenerator : public BaseGenerator {
                            std::string var_name = "obj") const {
     std::string code;
     assert(type.enum_def->is_union);
-    code += GenIndents(indents) + "obj = None";
+    code += GenIndents(indents) + var_name + " = None";
     for (auto val : type.enum_def->Vals()) {
       if (val->name == "NONE") continue;
       code += GenIndents(indents) + "if type == " + type.enum_def->name + "." +
               val->name + " : ";
-      code += GenIndents(indents + 1) + "obj = " + val->name + "()";
+      code += GenIndents(indents + 1) + var_name + " = " + val->name + "()";
     }
     return code;
   }
