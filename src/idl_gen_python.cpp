@@ -518,7 +518,7 @@ class PythonGenerator : public BaseGenerator {
 
   // Get the value of a union from an object.
   void GetUnionField(const StructDef &struct_def, const FieldDef &field,
-                     std::string *code_ptr, ImportMap &imports) const {
+                     std::string *code_ptr) const {
     auto &code = *code_ptr;
     GenReceiver(struct_def, code_ptr);
     std::string return_ty = "flatbuffers.table.Table";
@@ -1153,7 +1153,7 @@ class PythonGenerator : public BaseGenerator {
           break;
         }
         case BASE_TYPE_UNION:
-          GetUnionField(struct_def, field, code_ptr, imports);
+          GetUnionField(struct_def, field, code_ptr);
           break;
         default: FLATBUFFERS_ASSERT(0);
       }
