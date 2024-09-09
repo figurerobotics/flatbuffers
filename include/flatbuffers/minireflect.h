@@ -59,6 +59,7 @@ struct IterationVisitor {
   virtual void Float(float) {}
   virtual void Double(double) {}
   virtual void String(const String *) {}
+  virtual void Default(const char *, bool) {}
   virtual void Unknown(const uint8_t *) {}  // From a future version.
   // These mark the scope of a vector.
   virtual void StartVector() {}
@@ -66,6 +67,7 @@ struct IterationVisitor {
   virtual void Element(size_t /*i*/, ElementaryType /*type*/,
                        const TypeTable * /*type_table*/,
                        const uint8_t * /*val*/) {}
+  virtual bool IncludeDefaults() { return false; }
   virtual ~IterationVisitor() {}
 };
 
@@ -120,7 +122,18 @@ void IterateObject(const uint8_t *obj, const TypeTable *type_table,
 
 inline void IterateValue(ElementaryType type, const uint8_t *val,
                          const TypeTable *type_table, const uint8_t *prev_val,
-                         soffset_t vector_index, IterationVisitor *visitor) {
+                         soffset_t vector_index, IterationVisitor *visitor,
+                         const char *default_value, bool is_repeating) {
+  if (!val && default_value) {
+    const bool quoteable =
+        (type == ElementaryType::ET_STRING &&
+         default_value != std::string("null")) ||
+        (!is_repeating && type_table && type_table->st == ST_ENUM) ||
+        (!is_repeating && type_table && type_table->st == ST_UNION &&
+         default_value != std::string("null"));
+    visitor->Default(default_value, quoteable);
+    return;
+  }
   switch (type) {
     case ET_UTYPE: {
       auto tval = ReadScalar<uint8_t>(val);
@@ -243,6 +256,9 @@ inline void IterateObject(const uint8_t *obj, const TypeTable *type_table,
     const TypeTable *ref = nullptr;
     if (ref_idx >= 0) { ref = type_table->type_refs[ref_idx](); }
     auto name = type_table->names ? type_table->names[i] : nullptr;
+    auto default_value = type_table->default_value_token
+                             ? type_table->default_value_token[i]
+                             : nullptr;
     const uint8_t *val = nullptr;
     if (type_table->st == ST_TABLE) {
       val = reinterpret_cast<const Table *>(obj)->GetAddressOf(
@@ -251,33 +267,32 @@ inline void IterateObject(const uint8_t *obj, const TypeTable *type_table,
       val = obj + type_table->values[i];
     }
     visitor->Field(i, set_idx, type, is_repeating, ref, name, val);
-    if (val) {
-      set_idx++;
-      if (is_repeating) {
-        auto elem_ptr = val;
-        size_t size = 0;
-        if (type_table->st == ST_TABLE) {
-          // variable length vector
-          val += ReadScalar<uoffset_t>(val);
-          auto vec = reinterpret_cast<const Vector<uint8_t> *>(val);
-          elem_ptr = vec->Data();
-          size = vec->size();
-        } else {
-          // otherwise fixed size array
-          size = type_table->array_sizes[array_idx];
-          ++array_idx;
-        }
-        visitor->StartVector();
-        for (size_t j = 0; j < size; j++) {
-          visitor->Element(j, type, ref, elem_ptr);
-          IterateValue(type, elem_ptr, ref, prev_val, static_cast<soffset_t>(j),
-                       visitor);
-          elem_ptr += InlineSize(type, ref);
-        }
-        visitor->EndVector();
+    set_idx++;
+    if (is_repeating && val) {
+      auto elem_ptr = val;
+      size_t size = 0;
+      if (type_table->st == ST_TABLE) {
+        // variable length vector
+        val += ReadScalar<uoffset_t>(val);
+        auto vec = reinterpret_cast<const Vector<uint8_t> *>(val);
+        elem_ptr = vec->Data();
+        size = vec->size();
       } else {
-        IterateValue(type, val, ref, prev_val, -1, visitor);
+        // otherwise fixed size array
+        size = type_table->array_sizes[array_idx];
+        ++array_idx;
       }
+      visitor->StartVector();
+      for (size_t j = 0; j < size; j++) {
+        visitor->Element(j, type, ref, elem_ptr);
+        IterateValue(type, elem_ptr, ref, prev_val, static_cast<soffset_t>(j),
+                     visitor, nullptr, false);
+        elem_ptr += InlineSize(type, ref);
+      }
+      visitor->EndVector();
+    } else {
+      IterateValue(type, val, ref, prev_val, -1, visitor, default_value,
+                   is_repeating);
     }
     prev_val = val;
   }
@@ -300,13 +315,15 @@ struct ToStringVisitor : public IterationVisitor {
   std::string in;
   size_t indent_level;
   bool vector_delimited;
+  bool include_defaults = false;
   ToStringVisitor(std::string delimiter, bool quotes, std::string indent,
-                  bool vdelimited = true)
+                  bool vdelimited = true, bool include_defaults = false)
       : d(delimiter),
         q(quotes),
         in(indent),
         indent_level(0),
-        vector_delimited(vdelimited) {}
+        vector_delimited(vdelimited),
+        include_defaults(include_defaults) {}
   ToStringVisitor(std::string delimiter)
       : d(delimiter),
         q(false),
@@ -318,12 +335,12 @@ struct ToStringVisitor : public IterationVisitor {
     for (size_t i = 0; i < indent_level; i++) { s += in; }
   }
 
-  void StartSequence() {
+  void StartSequence() override {
     s += "{";
     s += d;
     indent_level++;
   }
-  void EndSequence() {
+  void EndSequence() override {
     s += d;
     indent_level--;
     append_indent();
@@ -331,8 +348,8 @@ struct ToStringVisitor : public IterationVisitor {
   }
   void Field(size_t /*field_idx*/, size_t set_idx, ElementaryType /*type*/,
              bool /*is_vector*/, const TypeTable * /*type_table*/,
-             const char *name, const uint8_t *val) {
-    if (!val) return;
+             const char *name, const uint8_t *val) override {
+    if (!val && !include_defaults) return;
     if (set_idx) {
       s += ",";
       s += d;
@@ -354,23 +371,28 @@ struct ToStringVisitor : public IterationVisitor {
       s += NumToString(x);
     }
   }
-  void UType(uint8_t x, const char *name) { Named(x, name); }
-  void Bool(bool x) { s += x ? "true" : "false"; }
-  void Char(int8_t x, const char *name) { Named(x, name); }
-  void UChar(uint8_t x, const char *name) { Named(x, name); }
-  void Short(int16_t x, const char *name) { Named(x, name); }
-  void UShort(uint16_t x, const char *name) { Named(x, name); }
-  void Int(int32_t x, const char *name) { Named(x, name); }
-  void UInt(uint32_t x, const char *name) { Named(x, name); }
-  void Long(int64_t x) { s += NumToString(x); }
-  void ULong(uint64_t x) { s += NumToString(x); }
-  void Float(float x) { s += NumToString(x); }
-  void Double(double x) { s += NumToString(x); }
-  void String(const struct String *str) {
+  void UType(uint8_t x, const char *name) override { Named(x, name); }
+  void Bool(bool x) override { s += x ? "true" : "false"; }
+  void Char(int8_t x, const char *name) override { Named(x, name); }
+  void UChar(uint8_t x, const char *name) override { Named(x, name); }
+  void Short(int16_t x, const char *name) override { Named(x, name); }
+  void UShort(uint16_t x, const char *name) override { Named(x, name); }
+  void Int(int32_t x, const char *name) override { Named(x, name); }
+  void UInt(uint32_t x, const char *name) override { Named(x, name); }
+  void Long(int64_t x) override { s += NumToString(x); }
+  void ULong(uint64_t x) override { s += NumToString(x); }
+  void Float(float x) override { s += NumToString(x); }
+  void Double(double x) override { s += NumToString(x); }
+  void String(const struct String *str) override {
     EscapeString(str->c_str(), str->size(), &s, true, false);
   }
-  void Unknown(const uint8_t *) { s += "(?)"; }
-  void StartVector() {
+  void Default(const char *default_value, bool quoteable) override {
+    if (q && quoteable) s += "\"";
+    s += default_value;
+    if (q && quoteable) s += "\"";
+  }
+  void Unknown(const uint8_t *) override { s += "(?)"; }
+  void StartVector() override {
     s += "[";
     if (vector_delimited) {
       s += d;
@@ -380,7 +402,7 @@ struct ToStringVisitor : public IterationVisitor {
       s += " ";
     }
   }
-  void EndVector() {
+  void EndVector() override {
     if (vector_delimited) {
       s += d;
       indent_level--;
@@ -391,7 +413,8 @@ struct ToStringVisitor : public IterationVisitor {
     s += "]";
   }
   void Element(size_t i, ElementaryType /*type*/,
-               const TypeTable * /*type_table*/, const uint8_t * /*val*/) {
+               const TypeTable * /*type_table*/,
+               const uint8_t * /*val*/) override {
     if (i) {
       s += ",";
       if (vector_delimited) {
@@ -402,6 +425,7 @@ struct ToStringVisitor : public IterationVisitor {
       }
     }
   }
+  bool IncludeDefaults() override { return include_defaults; }
 };
 
 inline std::string FlatBufferToString(const uint8_t *buffer,
