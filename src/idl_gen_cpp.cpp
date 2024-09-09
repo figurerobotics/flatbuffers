@@ -1124,18 +1124,22 @@ class CppGenerator : public BaseGenerator {
         struct_def ? struct_def->fields.vec.size() : enum_def->size();
     code_.SetValue("NUM_FIELDS", NumToString(num_fields));
     std::vector<std::string> names;
+    std::vector<std::string> defaults;
     std::vector<Type> types;
 
     if (struct_def) {
       for (const auto &field : struct_def->fields.vec) {
         names.push_back(Name(*field));
         types.push_back(field->value.type);
+
+        defaults.push_back(GetDefaultValueJson(*field, true));
       }
     } else {
       for (auto it = enum_def->Vals().begin(); it != enum_def->Vals().end();
            ++it) {
         const auto &ev = **it;
         names.push_back(Name(ev));
+        defaults.push_back("");
         types.push_back(enum_def->is_union ? ev.union_type
                                            : Type(enum_def->underlying_type));
       }
@@ -1188,6 +1192,11 @@ class CppGenerator : public BaseGenerator {
       if (!ns.empty()) ns += ",\n    ";
       ns += "\"" + name + "\"";
     }
+    std::string defaults_string;
+    for (const auto &def : defaults) {
+      if (!defaults_string.empty()) defaults_string += ",\n    ";
+      defaults_string += "\"" + def + "\"";
+    }
     std::string vs;
     const auto consecutive_enum_from_zero =
         enum_def && enum_def->MinValue()->IsZero() &&
@@ -1211,6 +1220,7 @@ class CppGenerator : public BaseGenerator {
     code_.SetValue("REFS", rs);
     code_.SetValue("ARRAYSIZES", as);
     code_.SetValue("NAMES", ns);
+    code_.SetValue("DEFAULTS", defaults_string);
     code_.SetValue("VALUES", vs);
     code_ += "inline const ::flatbuffers::TypeTable *{{NAME}}TypeTable() {";
     if (num_fields) {
@@ -1235,6 +1245,9 @@ class CppGenerator : public BaseGenerator {
     if (has_names) {
       code_ += "  static const char * const names[] = {";
       code_ += "    {{NAMES}}";
+      code_ += "  };";
+      code_ += "  static const char * const defaults[] = {";
+      code_ += "    {{DEFAULTS}}";
       code_ += "  };";
     }
     code_ += "  static const ::flatbuffers::TypeTable tt = {";
@@ -1831,6 +1844,49 @@ class CppGenerator : public BaseGenerator {
     }
   }
 
+  std::string GenDefaultConstantJson(const FieldDef &field) {
+    if (IsFloat(field.value.type.base_type))
+      return float_const_gen_.GenFloatConstant(field);
+    else
+      return NumToStringCpp(field.value.constant, field.value.type.base_type);
+  }
+
+  std::string GetDefaultValueJson(const FieldDef &field, bool is_ctor) {
+    const auto &type = field.value.type;
+    if (IsVector(type) || IsArray(type)) {
+      return "[]";
+    } else if (field.IsOptional()) {
+      return "null";
+    } else if (type.enum_def && IsScalar(type.base_type)) {
+      auto ev = type.enum_def->FindByValue(field.value.constant);
+      if (ev) {
+        return Name(*ev);
+      } else {
+        return GenUnderlyingCast(
+            field, true, NumToStringCpp(field.value.constant, type.base_type));
+      }
+    } else if (field.sibling_union_field) {
+      // Note this needs to be after the enum def as we only want to apply to the
+      // primary union field and not the _type union field.
+      return "null";
+    } else if (type.base_type == BASE_TYPE_BOOL) {
+      return field.value.constant == "0" ? "false" : "true";
+    } else if (field.attributes.Lookup("cpp_type")) {
+      if (is_ctor) {
+        if (PtrType(&field) == "naked") {
+          return "null";
+        } else {
+          return "";
+        }
+      } else {
+        return "0";
+      }
+    } else if (IsStruct(type) && (field.value.constant == "0")) {
+      return "null";
+    } else {
+      return GenDefaultConstant(field);
+    }
+  }
   void GenParam(const FieldDef &field, bool direct, const char *prefix) {
     code_.SetValue("PRE", prefix);
     code_.SetValue("PARAM_NAME", Name(field));
