@@ -1256,7 +1256,8 @@ class CppGenerator : public BaseGenerator {
              (!type_refs.empty() ? "type_refs, " : "nullptr, ") +
              (!as.empty() ? "array_sizes, " : "nullptr, ") +
              (!vs.empty() ? "values, " : "nullptr, ") +
-             (has_names ? "names" : "nullptr");
+             (has_names ? "names, " : "nullptr, ") +
+             (has_names ? "defaults" : "nullptr");
     code_ += "  };";
     code_ += "  return &tt;";
     code_ += "}";
