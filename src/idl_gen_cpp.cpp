@@ -1866,10 +1866,7 @@ class CppGenerator : public BaseGenerator {
   }
 
   std::string GenDefaultConstantJson(const FieldDef &field) {
-    if (IsFloat(field.value.type.base_type))
-      return float_const_gen_.GenFloatConstant(field);
-    else
-      return NumToStringCpp(field.value.constant, field.value.type.base_type);
+    return field.value.constant;
   }
 
   std::string GetDefaultValueJson(const FieldDef &field, bool is_ctor) {
@@ -1883,8 +1880,7 @@ class CppGenerator : public BaseGenerator {
       if (ev) {
         return Name(*ev);
       } else {
-        return GenUnderlyingCast(
-            field, true, NumToStringCpp(field.value.constant, type.base_type));
+        return GenUnderlyingCast(field, true, field.value.constant);
       }
     } else if (field.sibling_union_field) {
       // Note this needs to be after the enum def as we only want to apply to the
@@ -1905,7 +1901,7 @@ class CppGenerator : public BaseGenerator {
     } else if (IsStruct(type) && (field.value.constant == "0")) {
       return "null";
     } else {
-      return GenDefaultConstant(field);
+      return GenDefaultConstantJson(field);
     }
   }
   void GenParam(const FieldDef &field, bool direct, const char *prefix) {
