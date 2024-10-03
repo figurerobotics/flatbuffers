@@ -704,6 +704,7 @@ struct IDLOptions {
   bool python_no_type_prefix_suffix;
   bool python_typing;
   ProtoIdGapAction proto_id_gap_action;
+  std::string pybind_include_filename_suffix;
 
   // Possible options for the more general generator below.
   enum Language {
@@ -725,6 +726,7 @@ struct IDLOptions {
     kSwift = 1 << 16,
     kNim = 1 << 17,
     kProto = 1 << 18,
+    kPybind = 1 << 19,
     kMAX
   };
 
