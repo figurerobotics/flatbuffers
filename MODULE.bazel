@@ -56,6 +56,14 @@ bazel_dep(
     name = "bazel_skylib",
     version = "1.7.1",
 )
+bazel_dep(
+    name = "bazel_skylib",
+    version = "1.7.1",
+)
+bazel_dep(
+    name = "pybind11_bazel",
+    version = "2.13.6"
+)
 
 npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
 npm.npm_translate_lock(

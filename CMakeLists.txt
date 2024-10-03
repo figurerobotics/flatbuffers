@@ -57,6 +57,9 @@ option(FLATBUFFERS_SKIP_MONSTER_EXTRA
 option(FLATBUFFERS_STRICT_MODE
       "Build flatbuffers with all warnings as errors (-Werror or /WX)."
       OFF)
+option(FLATBUFFERS_ENABLE_PYBIND
+      "Include pybind11 support in the flatbuffers library."
+      OFF)
 
 if(NOT DEFINED FLATBUFFERS_CPP_STD)
   set(FLATBUFFERS_CPP_STD 11)
@@ -152,6 +155,12 @@ set(FlatBuffers_Library_SRCS
   src/util.cpp
 )
 
+if (FLATBUFFERS_ENABLE_PYBIND)
+  list(APPEND FlatBuffers_Library_SRCS pybind/include/flatbuffers/pybind/bind_array.h)
+  list(APPEND FlatBuffers_Library_SRCS pybind/include/flatbuffers/pybind/casters.h)
+  list(APPEND FlatBuffers_Library_SRCS pybind/include/flatbuffers/pybind/memory.h)
+endif()
+
 set(FlatBuffers_Compiler_SRCS
   ${FlatBuffers_Library_SRCS}
   src/idl_gen_binary.cpp
@@ -165,6 +174,7 @@ set(FlatBuffers_Compiler_SRCS
   src/idl_gen_java.cpp
   src/idl_gen_ts.cpp
   src/idl_gen_php.cpp
+  src/idl_gen_pybind.cpp
   src/idl_gen_python.cpp
   src/idl_gen_lobster.cpp
   src/idl_gen_rust.cpp
@@ -431,6 +441,12 @@ else()
   endif()
 endif()
 
+if (FLATBUFFERS_ENABLE_PYBIND)
+  find_package(Python COMPONENTS Interpreter Development)
+  find_package(pybind11 CONFIG REQUIRED)
+  include_directories(pybind/include)
+endif()
+
 if(FLATBUFFERS_BUILD_FLATLIB)
   add_library(flatbuffers STATIC ${FlatBuffers_Library_SRCS})
 
@@ -492,9 +508,9 @@ if(FLATBUFFERS_BUILD_SHAREDLIB)
   endif()
 endif()
 
-function(compile_schema SRC_FBS OPT OUT_GEN_FILE) 
+function(compile_schema SRC_FBS OPT GEN_EXT OUT_GEN_FILE)
   get_filename_component(SRC_FBS_DIR ${SRC_FBS} PATH)
-  string(REGEX REPLACE "\\.fbs$" "_generated.h" GEN_HEADER ${SRC_FBS})
+  string(REGEX REPLACE "\\.fbs$" "_generated.${GEN_EXT}" GEN_HEADER ${SRC_FBS})
   add_custom_command(
     OUTPUT ${GEN_HEADER}
     COMMAND "${FLATBUFFERS_FLATC_EXECUTABLE}"
@@ -508,13 +524,20 @@ function(compile_schema SRC_FBS OPT OUT_GEN_FILE)
 endfunction()
 
 function(compile_schema_for_test SRC_FBS OPT)
-  compile_schema("${SRC_FBS}" "${OPT}" GEN_FILE)
+  compile_schema("${SRC_FBS}" "${OPT}" "h" GEN_FILE)
   target_sources(flattests PRIVATE ${GEN_FILE})
 endfunction()
 
 function(compile_schema_for_samples SRC_FBS OPT)
-  compile_schema("${SRC_FBS}" "${OPT}" GEN_FILE)
+  compile_schema("${SRC_FBS}" "${OPT}" "h" GEN_FILE)
   target_sources(flatsample PRIVATE ${GEN_FILE})
+endfunction()
+
+function(compile_schema_for_pybind TARGET_NAME SRC_FBS PYBIND_OPT)
+  compile_schema("${SRC_FBS}" "${PYBIND_OPT}" "cpp" PYBIND_GEN_FILE)
+  pybind11_add_module("${TARGET_NAME}" "${PYBIND_GEN_FILE}")
+  target_include_directories("${TARGET_NAME}" PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+  target_compile_features("${TARGET_NAME}" PRIVATE cxx_std_17) # requires cmake 3.8
 endfunction()
 
 if(FLATBUFFERS_BUILD_TESTS)
@@ -585,6 +608,21 @@ if(FLATBUFFERS_BUILD_TESTS)
       add_fsanitize_to_target(flattests_cpp17 ${FLATBUFFERS_CODE_SANITIZE})
     endif()
   endif(FLATBUFFERS_BUILD_CPP17)
+
+  if(FLATBUFFERS_ENABLE_PYBIND)
+    SET(FLATC_PYBIND_OPT --pybind --gen-mutable --gen-object-api --reflect-names)
+    SET(FLATC_PYBIND_OPT_SCOPED_ENUMS ${FLATC_PYBIND_OPT};--scoped-enums)
+    compile_schema_for_pybind(alignment_test_generated tests/alignment_test.fbs "${FLATC_PYBIND_OPT}")
+    compile_schema_for_pybind(arrays_test_generated tests/arrays_test.fbs "${FLATC_PYBIND_OPT_SCOPED_ENUMS}")
+    compile_schema_for_pybind(key_field_sample_generated tests/key_field/key_field_sample.fbs "${FLATC_PYBIND_OPT}")
+
+    compile_schema_for_pybind(monster_generated samples/monster.fbs "${FLATC_PYBIND_OPT}")
+
+    # TODO(michaelahn): Add more test coverage.
+    # SET(FLATC_TEST_INCL_OPT -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/include_test")
+    # compile_schema_for_test(tests/monster_test.fbs "${FLATC_OPT_SCOPED_ENUMS};${FLATC_TEST_INCL_OPT}")
+    # compile_schema_for_pybind(monster_test_generated tests/monster_test.fbs "${FLATC_PYBIND_OPT_SCOPED_ENUMS};${FLATC_TEST_INCL_OPT}")
+  endif(FLATBUFFERS_ENABLE_PYBIND)
 endif()
 
 if(FLATBUFFERS_BUILD_GRPCTEST)

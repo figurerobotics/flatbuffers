@@ -129,6 +129,8 @@ cc_library(
         "idl_gen_lobster.h",
         "idl_gen_php.cpp",
         "idl_gen_php.h",
+        "idl_gen_pybind.cpp",
+        "idl_gen_pybind.h",
         "idl_gen_python.cpp",
         "idl_gen_python.h",
         "idl_gen_rust.cpp",
