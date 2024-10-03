@@ -1,0 +1,11 @@
+load("@pybind11_bazel//:build_defs.bzl", "pybind_library")
+
+package(default_visibility = ["//visibility:public"])
+
+pybind_library(
+    name = "pybind",
+    hdrs = glob([
+        "include/flatbuffers/pybind/*.h",
+    ]),
+    includes = ["include"],
+)
