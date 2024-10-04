@@ -254,6 +254,10 @@ const static FlatCOption flatc_options[] = {
   { "", "python-no-type-prefix-suffix", "",
     "Skip emission of Python functions that are prefixed with typenames" },
   { "", "python-typing", "", "Generate Python type annotations" },
+  { "", "pybind-include-filename-suffix", "",
+    "The suffix that is assumed for generated C++ headers that are included by "
+    "the pybind module. This is needed if the C++ headers are generated with a "
+    "different `--filename-suffix` than the pybind module." },
   { "", "ts-omit-entrypoint", "",
     "Omit emission of namespace entrypoint file" },
   { "", "file-names-only", "",
@@ -664,6 +668,9 @@ FlatCOptions FlatCompiler::ParseFromCommandLineArguments(int argc,
         opts.python_no_type_prefix_suffix = true;
       } else if (arg == "--python-typing") {
         opts.python_typing = true;
+      } else if (arg == "--pybind-include-filename-suffix") {
+        if (++argi >= argc) Error("missing value following: " + arg, true);
+        opts.pybind_include_filename_suffix = argv[argi];
       } else if (arg == "--ts-omit-entrypoint") {
         opts.ts_omit_entrypoint = true;
       } else if (arg == "--annotate-sparse-vectors") {

@@ -34,6 +34,7 @@
 #include "idl_gen_kotlin.h"
 #include "idl_gen_lobster.h"
 #include "idl_gen_php.h"
+#include "idl_gen_pybind.h"
 #include "idl_gen_python.h"
 #include "idl_gen_rust.h"
 #include "idl_gen_swift.h"
@@ -144,6 +145,11 @@ int main(int argc, const char *argv[]) {
       flatbuffers::FlatCOption{ "", "nim", "",
                                 "Generate Nim files for tables/structs" },
       flatbuffers::NewNimBfbsGenerator(flatbuffers_version));
+
+  flatc.RegisterCodeGenerator(
+      flatbuffers::FlatCOption{ "", "pybind", "",
+                                "Generate pybind files for tables/structs" },
+      flatbuffers::NewPybindCodeGenerator());
 
   flatc.RegisterCodeGenerator(
       flatbuffers::FlatCOption{ "p", "python", "",

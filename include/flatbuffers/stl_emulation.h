@@ -389,6 +389,7 @@ class span FLATBUFFERS_FINAL_CLASS {
       FLATBUFFERS_NOEXCEPT {
     data_ = other.data_;
     count_ = other.count_;
+    return *this;
   }
 
   // Limited implementation of
@@ -466,7 +467,7 @@ class span FLATBUFFERS_FINAL_CLASS {
 
  private:
   // This is a naive implementation with 'count_' member even if (Extent != dynamic_extent).
-  pointer const data_;
+  pointer data_;
   size_type count_;
 };
 #endif  // defined(FLATBUFFERS_USE_STD_SPAN)
