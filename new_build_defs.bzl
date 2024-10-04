@@ -202,7 +202,6 @@ def flatbuffer_cc_library(
         hdrs = [":%s" % gen_target_name],
         deps = deps + [
             "@com_github_google_flatbuffers//:runtime_cc",
-            "@com_github_google_flatbuffers//:flatbuffers",
         ],
         **kwargs
     )
