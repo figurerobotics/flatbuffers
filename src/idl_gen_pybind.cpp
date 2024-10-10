@@ -17,7 +17,6 @@
 /*
 TODO(michaelahn): Feature completion:
 - Include docstrings in py::doc.
-- (In)equality operators.
 - Vector __contains__, more sequence methods.
 - C++-specific flatbuffer features (native types).
 */
@@ -41,8 +40,8 @@ namespace pybind {
 
 namespace {
 
-// TODO(michaelahn): Factor out keywords and share with cpp/python code generators.
-// Taken from idl_gen_cpp.cpp.
+// TODO(michaelahn): Factor out keywords and share with cpp/python code
+// generators. Taken from idl_gen_cpp.cpp.
 const std::unordered_set<std::string> &CppKeywords() {
   const auto *const kKeywords = new std::unordered_set<std::string>{
     "alignas",
@@ -434,8 +433,11 @@ class PybindGenerator : public BaseGenerator {
           info.definition_code.insert(
               "::flatbuffers::pybind::BindArrayArithmetic<" + cpp_type +
               ">(m, \"" + pybind_name + "\");");
-        } else if (element_type.base_type == BASE_TYPE_STRUCT ||
-                   element_type.base_type == BASE_TYPE_STRING) {
+        } else if (!struct_def->fixed &&
+                   (element_type.base_type == BASE_TYPE_STRUCT ||
+                    element_type.base_type == BASE_TYPE_STRING)) {
+          // Vectors of structs/strings in packed flatbuffer tables are not
+          // writeable.
           info.definition_code.insert(
               "::flatbuffers::pybind::BindArrayReadonly<" + cpp_type +
               ">(m, \"" + pybind_name + "\");");
@@ -595,6 +597,12 @@ class PybindGenerator : public BaseGenerator {
       }
     }
 
+    // operators.
+    if (opts_.gen_compare) {
+      code_ += Indent() + "{{BIND_VAR}}.def(py::self == py::self);";
+      code_ += Indent() + "{{BIND_VAR}}.def(py::self != py::self);";
+    }
+
     // __repr__
     GenerateReprBinding(field_defs);
 
@@ -682,10 +690,16 @@ class PybindGenerator : public BaseGenerator {
 
       // POD types.
       if (opts_.mutable_buffer) {
-        code_ += Indent() +
-                 "{{BIND_VAR}}.def_property(\"{{PY_FIELD}}\", "
-                 "&{{CPP_TYPE}}::{{CPP_FIELD}}, "
-                 "&{{CPP_TYPE}}::mutate_{{CPP_FIELD}});";
+        code_ += Indent() + "{{BIND_VAR}}.def_property(";
+        code_ += Indent(3) + "\"{{PY_FIELD}}\",";
+        code_ += Indent(3) + "&{{CPP_TYPE}}::{{CPP_FIELD}},";
+        code_ += Indent(3) + "[]({{CPP_TYPE}} &self, " +
+                 CppArgumentType(field_type) + " value) {";
+        code_ += Indent(4) + "if (!self.mutate_{{CPP_FIELD}}(value)) {";
+        code_ += Indent(5) +
+                 "throw py::buffer_error(\"{{PY_FIELD}} is not writeable\");";
+        code_ += Indent(4) + "}";
+        code_ += Indent(3) + "});";
       } else {
         code_ += Indent() +
                  "{{BIND_VAR}}.def_property_readonly(\"{{PY_FIELD}}\", "
@@ -728,8 +742,8 @@ class PybindGenerator : public BaseGenerator {
         std::string argument_type = CppArgumentType(
             field->value.type, /*object_api=*/true, /*optional=*/true);
         ctor_params.push_back(argument_type + " " +
-                              cpp_namer_.Variable(field->name));
-        py_args.push_back("py::arg(\"" + py_namer_.Variable(field->name) +
+                              cpp_namer_.Field(field->name));
+        py_args.push_back("py::arg(\"" + py_namer_.Field(field->name) +
                           "\") = " + PyArgDefaultValue(*field));
       }
       code_ += Indent() + "{{BIND_VAR}}.def(";
@@ -740,7 +754,7 @@ class PybindGenerator : public BaseGenerator {
         code_.SetValue("CPP_FIELD", cpp_namer_.Field(*field));
         code_.SetValue("CPP_FIELD_TYPE",
                        CppType(field_type, /*object_api=*/true));
-        code_.SetValue("CPP_FIELD_VALUE", cpp_namer_.Variable(field->name));
+        code_.SetValue("CPP_FIELD_VALUE", cpp_namer_.Field(field->name));
 
         if (IsString(field_type)) {
           code_ += Indent(4) +
@@ -811,6 +825,10 @@ class PybindGenerator : public BaseGenerator {
         code_.SetValue("UNION_VARIANT_TYPE",
                        CppUnionVariantType(enum_def, /*object_api=*/true));
         code_.SetValue("UNION_ENUM_TYPE", cpp_namer_.NamespacedType(enum_def));
+        // Unions should at least have a NONE item as its first entry.
+        FLATBUFFERS_ASSERT(enum_def.Vals().size() > 0);
+        code_.SetValue("UNION_ENUM_NONE_NAME",
+                       CppEnumValueName(enum_def, *enum_def.Vals()[0]));
 
         code_ += Indent() + "{{BIND_VAR}}.def_property(";
         code_ += Indent(3) + "\"{{PY_FIELD}}\",";
@@ -822,7 +840,8 @@ class PybindGenerator : public BaseGenerator {
           code_ += Indent(5) + "case " + CppEnumValueName(enum_def, *val) + ":";
           if (val->union_type.base_type == BASE_TYPE_NONE) {
             code_ += Indent(6) + "return std::nullopt;";
-          } else if (val->union_type.base_type == BASE_TYPE_STRUCT) {
+          } else {
+            FLATBUFFERS_ASSERT(val->union_type.base_type == BASE_TYPE_STRUCT);
             code_ += Indent(6) + "return self.{{CPP_FIELD}}.As" +
                      cpp_namer_.Type(*val->union_type.struct_def) + "();";
           }
@@ -843,23 +862,50 @@ class PybindGenerator : public BaseGenerator {
         code_ += Indent(4) + "}";
         code_ += Indent(3) + "}, py::return_value_policy::reference_internal);";
 
+        // `ensure_{name}` method, which instantiates the union with the given
+        // type if not set already.
         code_ += Indent() + "{{BIND_VAR}}.def(";
-        code_ += Indent(3) + "\"set_{{PY_FIELD}}\",";
+        code_ += Indent(3) + "\"ensure_{{PY_FIELD}}\",";
         code_ += Indent(3) +
-                 "[]({{CPP_TYPE}} &self, {{UNION_ENUM_TYPE}} union_enum) "
+                 "[]({{CPP_TYPE}} &self, py::type union_type) "
                  "-> {{UNION_VARIANT_TYPE}} {";
+        code_ += Indent(4) + "{{UNION_ENUM_TYPE}} union_enum;";
+        bool has_first = false;
+        for (const auto *val : enum_def.Vals()) {
+          if (val->union_type.base_type != BASE_TYPE_STRUCT) continue;
+          code_ += Indent(4) + (has_first ? "else " : "") +
+                   "if (union_type.is(py::type::of<" +
+                   CppType(val->union_type, /*object_api=*/true) + ">())) {";
+          code_ += Indent(5) +
+                   "union_enum = " + CppEnumValueName(enum_def, *val) + ";";
+          code_ += Indent(4) + "}";
+          has_first = true;
+        }
+        code_ += Indent(4) + "else {";
+        code_ += Indent(5) +
+                 "throw py::value_error(py::str(\"{} is not part of union " +
+                 cpp_namer_.Type(enum_def) + "\").format(union_type));";
+        code_ += Indent(4) + "}";
+        code_ += Indent(4) +
+                 "bool holds_none = self.{{CPP_FIELD}}.type == "
+                 "{{UNION_ENUM_NONE_NAME}};";
+        code_ += Indent(4) +
+                 "if (!holds_none && self.{{CPP_FIELD}}.type != union_enum) {";
+        code_ += Indent(5) +
+                 "throw py::value_error(py::str(\"Union field is already set "
+                 "to {}\").format(self.{{CPP_FIELD}}.type));";
+        code_ += Indent(4) + "}";
         code_ += Indent(4) + "switch (union_enum) {";
         for (const auto *val : enum_def.Vals()) {
           code_ += Indent(5) + "case " + CppEnumValueName(enum_def, *val) + ":";
           if (val->union_type.base_type == BASE_TYPE_NONE) {
-            code_ += Indent(6) + "self.{{CPP_FIELD}}.Reset();";
             code_ += Indent(6) + "return std::nullopt;";
-          } else if (val->union_type.base_type == BASE_TYPE_STRUCT) {
-            const auto &union_struct_def = *val->union_type.struct_def;
-            code_ += Indent(6) + "self.{{CPP_FIELD}}.Set(" +
-                     CppObjectApiType(union_struct_def) + "());";
+          } else {
+            FLATBUFFERS_ASSERT(val->union_type.base_type == BASE_TYPE_STRUCT);
+            code_ += Indent(6) + "if (holds_none) self.{{CPP_FIELD}}.Set(" +
+                     CppObjectApiType(*val->union_type.struct_def) + "());";
             code_ += Indent(6) + "return self.{{CPP_FIELD}}.As" +
-                     cpp_namer_.Type(union_struct_def) + "();";
+                     cpp_namer_.Type(*val->union_type.struct_def) + "();";
           }
         }
         code_ += Indent(5) + "default:";
@@ -876,8 +922,8 @@ class PybindGenerator : public BaseGenerator {
         code_ += Indent(3) +
                  "[](const {{CPP_TYPE}} &self) -> "
                  "std::optional<{{CPP_FIELD_TYPE}}*> {";
-        code_ +=
-            Indent(4) + "if (self.{{CPP_FIELD}} == nullptr) { return std::nullopt; }";
+        code_ += Indent(4) +
+                 "if (self.{{CPP_FIELD}} == nullptr) { return std::nullopt; }";
         code_ += Indent(4) + "return self.{{CPP_FIELD}}.get();";
         code_ += Indent(3) + "},";
         code_ += Indent(3) +
@@ -894,11 +940,11 @@ class PybindGenerator : public BaseGenerator {
         code_ += Indent(4) + "}";
         code_ += Indent(3) + "});";
 
-        // `ensure_{name}` method, which instantiates the struct/table if it doesn't exist.
+        // `ensure_{name}` method, which instantiates the struct/table if not
+        // set already.
         code_ += Indent() + "{{BIND_VAR}}.def(";
         code_ += Indent(3) + "\"ensure_{{PY_FIELD}}\",";
-        code_ +=
-            Indent(3) + "[]({{CPP_TYPE}} &self) -> {{CPP_FIELD_TYPE}}* {";
+        code_ += Indent(3) + "[]({{CPP_TYPE}} &self) -> {{CPP_FIELD_TYPE}}* {";
         code_ += Indent(4) + "if (self.{{CPP_FIELD}} == nullptr) {";
         code_ += Indent(5) +
                  "self.{{CPP_FIELD}} = std::make_unique<{{CPP_FIELD_TYPE}}>();";
@@ -933,6 +979,12 @@ class PybindGenerator : public BaseGenerator {
     code_ += Indent(3) + "return ::flatbuffers::pybind::AsMemoryView(fbb);";
     // The memoryview keeps the bytearray buffer alive.
     code_ += Indent() + "}, py::keep_alive<0, 2>());";
+
+    // operators.
+    if (opts_.gen_compare) {
+      code_ += Indent() + "{{BIND_VAR}}.def(py::self == py::self);";
+      code_ += Indent() + "{{BIND_VAR}}.def(py::self != py::self);";
+    }
 
     // __repr__
     GenerateReprBinding(field_defs);
@@ -969,6 +1021,12 @@ class PybindGenerator : public BaseGenerator {
     for (const auto *field : def.fields.vec) {
       if (field->deprecated) continue;
       if (field->value.type.base_type == BASE_TYPE_UTYPE) continue;
+      // TODO(michael-ahn): Support vectors of unions.
+      if (IsVector(field->value.type) &&
+          (field->value.type.element == BASE_TYPE_UNION ||
+           field->value.type.element == BASE_TYPE_UTYPE)) {
+        continue;
+      }
       field_defs.push_back(field);
     }
     return field_defs;
@@ -1049,6 +1107,8 @@ class PybindGenerator : public BaseGenerator {
     if (IsUnion(type)) {
       return CppUnionVariantType(*type.enum_def, object_api);
     }
+    // For boolean arguments, use "bool" instead of "uint8_t".
+    if (IsBool(type.base_type)) { return "bool"; }
     std::string type_str = CppType(type, object_api);
     if (IsScalar(type.base_type)) { return type_str; }
     // NOTE: While a raw pointer argument type can take None (as nullptr),
@@ -1132,6 +1192,9 @@ class PybindGenerator : public BaseGenerator {
       }
       if (IsFloat(field_type.base_type)) {
         return float_const_gen_.GenFloatConstant(field);
+      }
+      if (IsBool(field_type.base_type)) {
+        return field.value.constant == "0" ? "false" : "true";
       }
       // TODO(michael-ahn): Consider reusing NumToStringCpp.
       return field.value.constant;
