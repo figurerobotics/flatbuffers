@@ -56,7 +56,7 @@ def flatbuffer_pybind_library(
         ] + cc_deps,
     )
     py_library(
-        name = name,
+        name = name + "_lib",
         deps = [
             ":%s.so" % (name),
         ] + py_deps,
