@@ -60,6 +60,17 @@ def _generated_file_name(fbs_name, filename_suffix, language):
     name_root = fbs_name.rsplit(".")[0]
     return name_root + filename_suffix + LANGUAGE_EXTS[language]
 
+def _generated_grpc_file_names(fbs_name, filename_suffix, language):
+    """Returns the generated file name for the given .fbs file."""
+    if language != "cpp":
+        fail("GRPC generation is unsupported for language: %s" % language)
+
+    name_root = fbs_name.rsplit(".")[0]
+    return [
+        name_root + ".grpc.fb.h",
+        name_root + ".grpc.fb.cc",
+    ]
+
 def _flatc_aspect_impl(target, ctx):
     all_fbs_files = []
     for attr in ["srcs", "hdrs"]:
@@ -100,12 +111,16 @@ def _flatc_generated_files_impl(ctx):
         out = ctx.actions.declare_file(
             _generated_file_name(src.basename, ctx.attr.filename_suffix, ctx.attr.language),
         )
+        outs = [out]
         args.add("-o", out.dirname)
         args.add("-I", "./")
         args.add("--%s" % ctx.attr.language)
         args.add("--filename-suffix", ctx.attr.filename_suffix)
         for arg in ctx.attr.flatc_args:
             arg = ctx.expand_location(arg)
+            if "--grpc" in arg:
+                for name in _generated_grpc_file_names(src.basename, ctx.attr.filename_suffix, ctx.attr.language):
+                    outs.append(ctx.actions.declare_file(name))
             if " " in arg:
                 args.add_all(arg.split(" "))
             else:
@@ -119,9 +134,10 @@ def _flatc_generated_files_impl(ctx):
             inputs = fbs_files,
             executable = ctx.executable.flatc,
             arguments = [args],
-            outputs = [out],
+            outputs = outs,
         )
-        all_outs.append(out)
+        for out in outs:
+            all_outs.append(out)
 
     default_info = DefaultInfo(files = depset(all_outs))
     flatc_info = FlatcInfo(fbs_files = fbs_files)
