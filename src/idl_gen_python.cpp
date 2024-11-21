@@ -2844,17 +2844,26 @@ class PythonGenerator : public BaseGenerator {
                                std::string *code_ptr) const {
     auto &code = *code_ptr;
     const auto union_type = namer_.Type(enum_def);
-    const auto variant = namer_.Variant(ev);
+    auto modified_ev = ev;
+    // If we are a single file mode then we need to create a object name in the
+    // local scope without the namespace.
+    // TODO(ENG-7570) Split on .s before they are converted to _, or add
+    // explicit check against _ in the table name during early validation.
+    if (const auto last_underscore = ev.name.find_last_of('_');
+        parser_.opts.one_file && last_underscore != ev.name.npos) {
+      modified_ev.name = ev.name.substr(last_underscore + 1);
+    }
     auto field_type = namer_.ObjectType(*ev.union_type.struct_def);
 
-    code +=
-        GenIndents(1) + "if unionType == " + union_type + "." + variant + ":";
+    code += GenIndents(1) + "if unionType == " + union_type + "." +
+            namer_.Variant(ev) + ":";
     if (parser_.opts.include_dependence_headers) {
       auto package_reference = GenPackageReference(ev.union_type);
       code += GenIndents(2) + "import " + package_reference;
       field_type = package_reference + "." + field_type;
     }
-    code += GenIndents(2) + "obj = " + variant + "()";
+
+    code += GenIndents(2) + "obj = " + namer_.Variant(modified_ev) + "()";
     code += GenIndents(2) + "obj.init(table.Bytes, table.Pos)";
     code += GenIndents(2) + "return obj";
   }
