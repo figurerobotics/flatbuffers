@@ -46,6 +46,11 @@ LANGUAGE_EXTS = {
     "swift": ".swift",
 }
 
+LANGUAGE_GRPC_EXTS = {
+    "cpp": [".grpc.fb.h", ".grpc.fb.cc"],
+    "python": ["_grpc_fb.py"],
+}
+
 FlatcInfo = provider(
     "Information produced from flatc code generation.",
     fields = {
@@ -62,14 +67,16 @@ def _generated_file_name(fbs_name, filename_suffix, language):
 
 def _generated_grpc_file_names(fbs_name, filename_suffix, language):
     """Returns the generated file name for the given .fbs file."""
-    if language != "cpp":
+    if language not in LANGUAGE_GRPC_EXTS:
         fail("GRPC generation is unsupported for language: %s" % language)
 
     name_root = fbs_name.rsplit(".")[0]
-    return [
-        name_root + ".grpc.fb.h",
-        name_root + ".grpc.fb.cc",
-    ]
+    res = []
+
+    for ext in LANGUAGE_GRPC_EXTS[language]:
+        res.append(name_root + ext)
+
+    return res
 
 def _flatc_aspect_impl(target, ctx):
     all_fbs_files = []
@@ -215,6 +222,7 @@ def flatbuffer_cc_library(
     )
     cc_library(
         name = name,
+        srcs = [":%s" % gen_target_name],
         hdrs = [":%s" % gen_target_name],
         deps = deps + [
             "@com_github_google_flatbuffers//:runtime_cc",

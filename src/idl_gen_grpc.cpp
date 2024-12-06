@@ -419,8 +419,9 @@ class PythonGRPCGenerator : public flatbuffers::BaseGenerator {
   CodeWriter code_;
 
  public:
-  PythonGRPCGenerator(const Parser &parser, const std::string &filename)
-      : BaseGenerator(parser, "", filename, "", "" /*Unused*/, "swift") {}
+  PythonGRPCGenerator(const Parser &parser, const std::string &path,
+                      const std::string &filename)
+      : BaseGenerator(parser, path, filename, "", "" /*Unused*/, "swift") {}
 
   bool generate() {
     code_.Clear();
@@ -441,6 +442,8 @@ class PythonGRPCGenerator : public flatbuffers::BaseGenerator {
   }
 
   std::string GenerateFileName() {
+    if (parser_.opts.one_file) { return path_ + file_name_ + "_grpc_fb.py"; }
+
     std::string namespace_dir;
     auto &namespaces = parser_.namespaces_.back()->components;
     for (auto it = namespaces.begin(); it != namespaces.end(); ++it) {
@@ -449,11 +452,11 @@ class PythonGRPCGenerator : public flatbuffers::BaseGenerator {
     }
     std::string grpc_py_filename = namespace_dir;
     if (!namespace_dir.empty()) grpc_py_filename += kPathSeparator;
-    return grpc_py_filename + file_name_ + "_grpc_fb.py";
+    return path_ + grpc_py_filename + file_name_ + "_grpc_fb.py";
   }
 };
 
-bool GeneratePythonGRPC(const Parser &parser, const std::string & /*path*/,
+bool GeneratePythonGRPC(const Parser &parser, const std::string &path,
                         const std::string &file_name) {
   int nservices = 0;
   for (auto it = parser.services_.vec.begin(); it != parser.services_.vec.end();
@@ -462,7 +465,7 @@ bool GeneratePythonGRPC(const Parser &parser, const std::string & /*path*/,
   }
   if (!nservices) return true;
 
-  return PythonGRPCGenerator(parser, file_name).generate();
+  return PythonGRPCGenerator(parser, path, file_name).generate();
 }
 
 class SwiftGRPCGenerator : public flatbuffers::BaseGenerator {
