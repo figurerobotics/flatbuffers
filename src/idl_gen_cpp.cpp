@@ -1411,6 +1411,9 @@ class CppGenerator : public BaseGenerator {
     }
 
     code_ += "struct {{NAME}}Union {";
+    code_ += "  template<typename T>";
+    code_ += "  using traits = {{NAME}}Traits<T>;";
+    code_ += "";
     code_ += "  {{NAME}} type;";
     code_ += "  void *value;";
     code_ += "";
@@ -1883,8 +1886,8 @@ class CppGenerator : public BaseGenerator {
         return GenUnderlyingCast(field, true, field.value.constant);
       }
     } else if (field.sibling_union_field) {
-      // Note this needs to be after the enum def as we only want to apply to the
-      // primary union field and not the _type union field.
+      // Note this needs to be after the enum def as we only want to apply to
+      // the primary union field and not the _type union field.
       return "null";
     } else if (type.base_type == BASE_TYPE_BOOL) {
       return field.value.constant == "0" ? "false" : "true";
@@ -2282,7 +2285,10 @@ class CppGenerator : public BaseGenerator {
     code_ += "struct {{NATIVE_NAME}} : public ::flatbuffers::NativeTable {";
     code_ += "  typedef {{STRUCT_NAME}} TableType;";
     code_ += "  // The fully qualified name of the type in the schema.";
-    code_ += "  static constexpr auto kTypeName = \"" + parser_.current_namespace_->GetFullyQualifiedName(Name(struct_def)) + "\";";
+    code_ +=
+        "  static constexpr auto kTypeName = \"" +
+        parser_.current_namespace_->GetFullyQualifiedName(Name(struct_def)) +
+        "\";";
     GenFullyQualifiedNameGetter(struct_def, native_name);
     for (const auto field : struct_def.fields.vec) { GenMember(*field); }
     GenOperatorNewDelete(struct_def);
@@ -2863,7 +2869,10 @@ class CppGenerator : public BaseGenerator {
     }
     code_ += "  typedef {{STRUCT_NAME}}Builder Builder;";
     code_ += "  // The fully qualified name of the type in the schema.";
-    code_ += "  static constexpr auto kTypeName = \"" + parser_.current_namespace_->GetFullyQualifiedName(Name(struct_def)) + "\";";
+    code_ +=
+        "  static constexpr auto kTypeName = \"" +
+        parser_.current_namespace_->GetFullyQualifiedName(Name(struct_def)) +
+        "\";";
     GenBinarySchemaTypeDef(parser_.root_struct_def_);
 
     if (opts_.g_cpp_std >= cpp::CPP_STD_17) { code_ += "  struct Traits;"; }
