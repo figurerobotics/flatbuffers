@@ -1450,6 +1450,7 @@ class CppGenerator : public BaseGenerator {
     code_ += "  " + UnionUnPackSignature(enum_def, true) + ";";
     code_ += "  " + UnionPackSignature(enum_def, true) + ";";
     code_ += "";
+    code_ += "  template<typename T> T* as() = delete;";
 
     for (const auto ev : enum_def.Vals()) {
       if (ev->IsZero()) { continue; }
@@ -1468,6 +1469,10 @@ class CppGenerator : public BaseGenerator {
       code_ += "    return type == {{NATIVE_ID}} ?";
       code_ +=
           "      reinterpret_cast<const {{NATIVE_TYPE}} *>(value) : nullptr;";
+      code_ += "  }";
+      code_ += "  template<>";
+      code_ += "  {{NATIVE_TYPE}}* as<{{NATIVE_TYPE}}>() {";
+      code_ += "    return As{{NATIVE_NAME}}();";
       code_ += "  }";
     }
     code_ += "};";
