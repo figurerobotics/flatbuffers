@@ -1115,7 +1115,8 @@ class CppGenerator : public BaseGenerator {
 
   std::string TableUnPackSignature(const StructDef &struct_def, bool inclass,
                                    const IDLOptions &opts) {
-    return NativeName(Name(struct_def), &struct_def, opts) + " *" +
+    return "std::unique_ptr<" +
+           NativeName(Name(struct_def), &struct_def, opts) + "> " +
            (inclass ? "" : Name(struct_def) + "::") +
            "UnPack(const ::flatbuffers::resolver_function_t *_resolver" +
            (inclass ? " = nullptr" : "") + ") const";
@@ -1685,7 +1686,7 @@ class CppGenerator : public BaseGenerator {
             code_ += "      return new " +
                      WrapInNameSpace(*ev.union_type.struct_def) + "(*ptr);";
           } else {
-            code_ += "      return ptr->UnPack(resolver);";
+            code_ += "      return ptr->UnPack(resolver).release();";
           }
         } else if (IsString(ev.union_type)) {
           code_ += "      return new std::string(ptr->c_str(), ptr->size());";
@@ -3715,22 +3716,9 @@ class CppGenerator : public BaseGenerator {
       // Generate the X::UnPack() method.
       code_ +=
           "inline " + TableUnPackSignature(struct_def, false, opts_) + " {";
-
-      if (opts_.g_cpp_std == cpp::CPP_STD_X0) {
-        auto native_name = WrapNativeNameInNameSpace(struct_def, parser_.opts);
-        code_.SetValue("POINTER_TYPE",
-                       GenTypeNativePtr(native_name, nullptr, false));
-        code_ +=
-            "  {{POINTER_TYPE}} _o = {{POINTER_TYPE}}(new {{NATIVE_NAME}}());";
-      } else if (opts_.g_cpp_std == cpp::CPP_STD_11) {
-        code_ +=
-            "  auto _o = std::unique_ptr<{{NATIVE_NAME}}>(new "
-            "{{NATIVE_NAME}}());";
-      } else {
-        code_ += "  auto _o = std::make_unique<{{NATIVE_NAME}}>();";
-      }
+      code_ += "  auto _o = std::make_unique<{{NATIVE_NAME}}>();";
       code_ += "  UnPackTo(_o.get(), _resolver);";
-      code_ += "  return _o.release();";
+      code_ += "  return _o;";
       code_ += "}";
       code_ += "";
       code_ +=
