@@ -1801,7 +1801,7 @@ class PythonGenerator : public BaseGenerator {
     code += "class " + namer_.ObjectType(struct_def) + "(object):\n";
     code +=
         Indent + "TYPE_NAME = '" + namer_.NamespacedType(struct_def) + "'\n";
-    code += Indent + "TABLE_TYPE = type(" + namer_.Type(struct_def) + ")\n";
+    code += Indent + "TABLE_TYPE = " + namer_.Type(struct_def) + "\n";
   }
 
   // Gets the accoresponding python builtin type of a BaseType for scalars and
