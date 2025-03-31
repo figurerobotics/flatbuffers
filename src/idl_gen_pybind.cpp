@@ -27,6 +27,7 @@ TODO(michaelahn): Feature completion:
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+// #include <iostream>
 
 #include "flatbuffers/code_generators.h"
 #include "flatbuffers/flatbuffers.h"
@@ -641,6 +642,7 @@ class PybindGenerator : public BaseGenerator {
 
     // Generate accessor bindings.
     for (const auto *field : field_defs) {
+      // printf("Looking at %s", field->name);
       const auto &field_type = field->value.type;
       code_.SetValue("CPP_FIELD", cpp_namer_.Field(*field));
       code_.SetValue("PY_FIELD", py_namer_.Field(*field));
