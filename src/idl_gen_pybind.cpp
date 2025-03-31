@@ -672,6 +672,9 @@ class PybindGenerator : public BaseGenerator {
             Indent(6) + "throw std::runtime_error(\"Invalid variant type\");";
         code_ += Indent(4) + "}";
         code_ += Indent(3) + "}, py::return_value_policy::reference_internal);";
+        code_ += Indent() +
+                 "{{BIND_VAR}}.def_property_readonly(\"{{PY_FIELD}}_type\", "
+                 "&{{CPP_TYPE}}::{{CPP_FIELD}}_type);";
         continue;
       }
 
@@ -843,7 +846,7 @@ class PybindGenerator : public BaseGenerator {
           } else {
             FLATBUFFERS_ASSERT(val->union_type.base_type == BASE_TYPE_STRUCT);
             code_ += Indent(6) + "return self.{{CPP_FIELD}}.As" +
-                     cpp_namer_.Type(*val->union_type.struct_def) + "();";
+                     cpp_namer_.Variant(*val) + "();";
           }
         }
         code_ += Indent(5) + "default:";
@@ -861,6 +864,13 @@ class PybindGenerator : public BaseGenerator {
         code_ += Indent(5) + "self.{{CPP_FIELD}}.Reset();";
         code_ += Indent(4) + "}";
         code_ += Indent(3) + "}, py::return_value_policy::reference_internal);";
+
+        // _type accessor (read-only, type is auto-set by the setter).
+        code_ += Indent() + "{{BIND_VAR}}.def_property_readonly(";
+        code_ += Indent(3) + "\"{{PY_FIELD}}_type\",";
+        code_ += Indent(3) + "[]({{CPP_TYPE}} &self) {";
+        code_ += Indent(4) + "return self.{{CPP_FIELD}}.type;";
+        code_ += Indent(3) + "});";
 
         // `ensure_{name}` method, which instantiates the union with the given
         // type if not set already.
@@ -905,7 +915,7 @@ class PybindGenerator : public BaseGenerator {
             code_ += Indent(6) + "if (holds_none) self.{{CPP_FIELD}}.Set(" +
                      CppObjectApiType(*val->union_type.struct_def) + "());";
             code_ += Indent(6) + "return self.{{CPP_FIELD}}.As" +
-                     cpp_namer_.Type(*val->union_type.struct_def) + "();";
+                     cpp_namer_.Variant(*val) + "();";
           }
         }
         code_ += Indent(5) + "default:";
