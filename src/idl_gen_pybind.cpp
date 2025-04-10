@@ -734,6 +734,13 @@ class PybindGenerator : public BaseGenerator {
     // Default constructor.
     code_ += Indent() + "{{BIND_VAR}}.def(py::init<>());";
 
+    // Reference to table object.
+    code_ += Indent() +
+             "{{BIND_VAR}}.attr(\"TABLE_TYPE\") = "
+             + "py::type::of<"
+             + cpp_namer_.NamespacedType(def)
+             + ">();";
+
     auto field_defs = GetFieldDefs(def);
 
     // Keyword args constructor.
@@ -989,6 +996,14 @@ class PybindGenerator : public BaseGenerator {
     code_ += Indent(3) + "return ::flatbuffers::pybind::AsMemoryView(fbb);";
     // The memoryview keeps the bytearray buffer alive.
     code_ += Indent() + "}, py::keep_alive<0, 2>());";
+
+    // Unpacking.
+    code_ += Indent() +
+             "{{BIND_VAR}}.def(\"unpack\", []({{CPP_TYPE}} &self, "
+             + "const " + cpp_namer_.NamespacedType(def) + " &table) {";
+    code_ += Indent(3) +
+             "table.UnPackTo(&self);";
+    code_ += Indent() + "});";
 
     // operators.
     if (opts_.gen_compare) {
