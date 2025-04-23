@@ -10,6 +10,10 @@ bazel_dep(
     version = "2.11.0",
 )
 bazel_dep(
+    name = "rules_python",
+    version = "0.38.0",
+)
+bazel_dep(
     name = "aspect_rules_esbuild",
     version = "0.21.0",
 )
@@ -36,8 +40,7 @@ bazel_dep(
 )
 bazel_dep(
     name = "rules_go",
-    version = "0.50.1",
-    repo_name = "io_bazel_rules_go",
+    version = "0.53.0",
 )
 bazel_dep(
     name = "rules_nodejs",
