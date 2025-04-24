@@ -2,7 +2,6 @@ module(
     name = "flatbuffers",
     version = "25.2.10",
     compatibility_level = 1,
-    repo_name = "flatbuffers",
 )
 
 bazel_dep(
@@ -61,7 +60,7 @@ bazel_dep(
 )
 bazel_dep(
     name = "pybind11_bazel",
-    version = "2.13.6"
+    version = "2.13.6",
 )
 
 npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")

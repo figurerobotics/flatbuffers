@@ -50,10 +50,10 @@ func (t *Table) VectorLen(off UOffsetT) int {
 // at "off" in this object.
 func (t *Table) Vector(off UOffsetT) UOffsetT {
 	off += t.Pos
-	x := off + GetUOffsetT(t.Bytes[off:])
+	off += GetUOffsetT(t.Bytes[off:])
 	// data starts after metadata containing the vector length
-	x += UOffsetT(SizeUOffsetT)
-	return x
+	off += UOffsetT(SizeUOffsetT)
+	return off
 }
 
 // Union initializes any Table-derived type to point to the union at the given
@@ -62,6 +62,15 @@ func (t *Table) Union(t2 *Table, off UOffsetT) {
 	off += t.Pos
 	t2.Pos = off + t.GetUOffsetT(off)
 	t2.Bytes = t.Bytes
+}
+
+// UnionVector initializes any Table-derived type to point to the union
+// at the given offset relative to the vector start.
+func (t *Table) UnionVector(t2 *Table, vec UOffsetT, off UOffsetT) {
+	el := t.GetUOffsetT(vec + off)
+	t2.Pos = vec + off + el
+	t2.Bytes = t.Bytes
+
 }
 
 // GetBool retrieves a bool at the given offset.
