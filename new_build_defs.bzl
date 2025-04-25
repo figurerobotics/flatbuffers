@@ -177,7 +177,7 @@ flatc_generated_files = rule(
             default = DEFAULT_FLATC_ARGS,
         ),
         "flatc": attr.label(
-            default = "@com_github_google_flatbuffers//:flatc",
+            default = "@flatbuffers//:flatc",
             doc = "The flatc compiler.",
             executable = True,
             allow_single_file = True,
@@ -225,7 +225,7 @@ def flatbuffer_cc_library(
         srcs = [":%s" % gen_target_name],
         hdrs = [":%s" % gen_target_name],
         deps = deps + [
-            "@com_github_google_flatbuffers//:runtime_cc",
+            "@flatbuffers//:runtime_cc",
         ],
         **kwargs
     )

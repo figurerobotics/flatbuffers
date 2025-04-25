@@ -16,7 +16,7 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
 # --- end runfiles.bash initialization v2 ---
 set -eu
 runfiles_export_envvars
-FLATC=$(rlocation com_github_google_flatbuffers/flatc)
+FLATC=$(rlocation flatbuffers/flatc)
 TS_FILE=$(${FLATC}  $@  | grep  "Entry point.*generated" | grep -o "bazel-out.*ts")
 export PATH="$(rlocation nodejs_linux_amd64/bin/nodejs/bin):${PATH}"
 ${ESBUILD_BIN} ${TS_FILE} --format=cjs --bundle --outfile="${OUTPUT_FILE}"  --external:flatbuffers --log-level=warning

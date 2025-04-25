@@ -7,6 +7,6 @@ cc_test(
     name = "pulls_in_flatbuffers_test",
     srcs = ["pulls_in_flatbuffers_test.cpp"],
     deps = [
-        "@com_github_google_flatbuffers//:flatbuffers",
+        "@flatbuffers//:flatbuffers",
     ],
 )

@@ -52,7 +52,7 @@ def flatbuffer_pybind_library(
         srcs = [":%s" % gen_target_name],
         copts = copts,
         deps = [
-            "@com_github_google_flatbuffers//pybind",
+            "@flatbuffers//pybind",
         ] + cc_deps,
     )
     py_library(
