@@ -775,8 +775,13 @@ class PythonGenerator : public BaseGenerator {
     if (is_bool) { getter = "bool(" + getter + ")"; }
     if (IsEnum(field.value.type)) {
       getter = field.value.type.enum_def->name + "(" + getter + ")";
+      code += Indent + Indent + Indent + "try:\n";
+      code += Indent + Indent + Indent + Indent + "return " + getter + "\n";
+      code += Indent + Indent + Indent + "except ValueError:\n";
+      code += Indent + Indent + Indent + Indent + "pass\n";
+    } else {
+      code += Indent + Indent + Indent + "return " + getter + "\n";
     }
-    code += Indent + Indent + Indent + "return " + getter + "\n";
     std::string default_value;
     if (field.IsScalarOptional()) {
       default_value = "None";
