@@ -4369,12 +4369,14 @@ bool Parser::Deserialize(const reflection::Schema *schema) {
   if (schema->fbs_files())
     for (auto s = schema->fbs_files()->begin(); s != schema->fbs_files()->end();
          ++s) {
-      for (auto f = s->included_filenames()->begin();
-           f != s->included_filenames()->end(); ++f) {
-        IncludedFile included_file;
-        included_file.filename = f->str();
-        files_included_per_file_[s->filename()->str()].insert(included_file);
-      }
+	  if (schema->included_filenames()) {
+	    for (auto f = s->included_filenames()->begin();
+		   f != s->included_filenames()->end(); ++f) {
+		   IncludedFile included_file;
+		   included_file.filename = f->str();
+		   files_included_per_file_[s->filename()->str()].insert(included_file);
+	    }
+	  }
     }
 
   return true;
