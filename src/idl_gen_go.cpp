@@ -1686,7 +1686,6 @@ class GoGenerator : public BaseGenerator {
   // Resets the needed imports before generating a new file.
   void ResetImports() {
     tracked_imported_namespaces_.clear();
-    printf("Cleared defs \n");
     needs_bytes_import_ = false;
     needs_math_import_ = false;
     needs_flatbuffers_import_ = false;
