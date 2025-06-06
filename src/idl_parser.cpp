@@ -2700,17 +2700,17 @@ bool Parser::SupportsAdvancedUnionFeatures() const {
   return (opts.lang_to_generate &
           ~(IDLOptions::kCpp | IDLOptions::kTs | IDLOptions::kPhp |
             IDLOptions::kJava | IDLOptions::kCSharp | IDLOptions::kKotlin |
-            IDLOptions::kBinary | IDLOptions::kSwift | IDLOptions::kNim |
-            IDLOptions::kJson | IDLOptions::kPython | IDLOptions::kPybind)) ==
-         0;
+            IDLOptions::kBinary | IDLOptions::kGo | IDLOptions::kSwift |
+            IDLOptions::kNim | IDLOptions::kJson | IDLOptions::kPython |
+            IDLOptions::kPybind)) == 0;
 }
 
 bool Parser::SupportsAdvancedArrayFeatures() const {
   return (opts.lang_to_generate &
           ~(IDLOptions::kCpp | IDLOptions::kPython | IDLOptions::kJava |
             IDLOptions::kCSharp | IDLOptions::kJsonSchema | IDLOptions::kJson |
-            IDLOptions::kBinary | IDLOptions::kRust | IDLOptions::kTs |
-            IDLOptions::kPybind)) == 0;
+            IDLOptions::kBinary | IDLOptions::kGo | IDLOptions::kRust |
+            IDLOptions::kTs | IDLOptions::kPybind)) == 0;
 }
 
 bool Parser::Supports64BitOffsets() const {

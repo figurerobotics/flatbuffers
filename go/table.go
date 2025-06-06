@@ -64,6 +64,14 @@ func (t *Table) Union(t2 *Table, off UOffsetT) {
 	t2.Bytes = t.Bytes
 }
 
+// UnionVector initializes any Table-derived type to point to the union
+// at the given offset relative to the vector start.
+func (t *Table) UnionVector(t2 *Table, vec UOffsetT, off UOffsetT) {
+	el := t.GetUOffsetT(vec + off)
+	t2.Pos = vec + off + el
+	t2.Bytes = t.Bytes
+}
+
 // GetBool retrieves a bool at the given offset.
 func (t *Table) GetBool(off UOffsetT) bool {
 	return GetBool(t.Bytes[off:])

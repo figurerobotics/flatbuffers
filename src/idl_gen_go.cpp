@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <sstream>
 #include <string>
 
@@ -91,6 +92,7 @@ class GoGenerator : public BaseGenerator {
       : BaseGenerator(parser, path, file_name, "" /* not used*/,
                       "" /* not used */, "go"),
         cur_name_space_(nullptr),
+        cur_declaration_file_(),
         namer_(WithFlagOptions(GoDefaultConfig(), parser.opts, path),
                GoKeywords()) {
     std::istringstream iss(go_namespace);
@@ -108,8 +110,7 @@ class GoGenerator : public BaseGenerator {
 
     if (parser_.opts.one_file) {
       std::string code = "";
-      const bool is_enum = !parser_.enums_.vec.empty();
-      BeginFile(LastNamespacePart(go_namespace_), true, is_enum, &code);
+      BeginFile(LastNamespacePart(go_namespace_), true, &code);
       code += one_file_code;
       const std::string filename =
           GeneratedFileName(path_, file_name_, parser_.opts);
@@ -138,7 +139,7 @@ class GoGenerator : public BaseGenerator {
       if (parser_.opts.one_file) {
         *one_file_code += enumcode;
       } else {
-        if (!SaveType(enum_def, enumcode, needs_imports, true)) return false;
+        if (!SaveType(enum_def, enumcode, needs_imports)) return false;
       }
     }
     return true;
@@ -156,13 +157,14 @@ class GoGenerator : public BaseGenerator {
     for (auto it = parser_.structs_.vec.begin();
          it != parser_.structs_.vec.end(); ++it) {
       if (!parser_.opts.one_file) { ResetImports(); }
+      needs_flatbuffers_import_ = true;
       std::string declcode;
       auto &struct_def = **it;
       GenStruct(struct_def, &declcode);
       if (parser_.opts.one_file) {
         *one_file_code += declcode;
       } else {
-        if (!SaveType(struct_def, declcode, true, false)) return false;
+        if (!SaveType(struct_def, declcode, true)) return false;
       }
     }
     return true;
@@ -170,16 +172,26 @@ class GoGenerator : public BaseGenerator {
 
   Namespace go_namespace_;
   Namespace *cur_name_space_;
+  std::string cur_declaration_file_;
   const IdlNamer namer_;
 
   struct NamespacePtrLess {
     bool operator()(const Definition *a, const Definition *b) const {
-      return *a->defined_namespace < *b->defined_namespace;
+      auto pa = std::filesystem::path(*a->declaration_file).parent_path();
+      auto pb = std::filesystem::path(*b->declaration_file).parent_path();
+      if (pa == pb) {
+        return a->defined_namespace->components.back() <
+               b->defined_namespace->components.back();
+      } else {
+        return pa < pb;
+      }
     }
   };
   std::set<const Definition *, NamespacePtrLess> tracked_imported_namespaces_;
   bool needs_math_import_ = false;
   bool needs_bytes_import_ = false;
+  bool needs_flatbuffers_import_ = false;
+  bool needs_strconv_import_ = false;
 
   // Most field accessors need to retrieve and test the field offset first,
   // this is the prefix code for that.
@@ -276,6 +288,7 @@ class GoGenerator : public BaseGenerator {
     code += "\treturn \"" + enum_def.name;
     code += "(\" + strconv.FormatInt(int64(v), 10) + \")\"\n";
     code += "}\n\n";
+    needs_strconv_import_ = true;
   }
 
   // Begin enum value map.
@@ -518,6 +531,39 @@ class GoGenerator : public BaseGenerator {
     code += "}\n\n";
   }
 
+  // Get the value of an array from an object.
+  void GetArrayField(const StructDef &struct_def, const FieldDef &field,
+                     std::string *code_ptr) {
+    std::string &code = *code_ptr;
+    GenReceiver(struct_def, code_ptr);
+    code += " " + namer_.Function(field) + "Length() int {\n";
+    code += "\treturn " + NumToString(field.value.type.fixed_length) + "\n";
+    code += "}\n\n";
+
+    GenReceiver(struct_def, code_ptr);
+    std::string type;
+
+    code += " " + namer_.Function(field) + "(j int) ";
+    if (field.value.type.enum_def != nullptr) {
+      type = TypeName(field);
+    } else {
+      type = GenTypeBasic(field.value.type.element);
+    }
+
+    code += type;
+    code += " {\n";
+    code +=
+        "\treturn " +
+        CastToEnum(field.value.type,
+                   GenGetter(field.value.type) +
+                       "(rcv._tab.Pos + flatbuffers.UOffsetT(" +
+                       NumToString(field.value.offset) + " + j*" +
+                       NumToString(InlineSize(field.value.type.VectorType())) +
+                       "))") +
+        "\n";
+    code += "}\n\n";
+  }
+
   // Get the value of a vector's struct member.
   void GetMemberOfVectorOfStruct(const StructDef &struct_def,
                                  const FieldDef &field, std::string *code_ptr) {
@@ -566,6 +612,25 @@ class GoGenerator : public BaseGenerator {
     code += "\t\treturn ";
     code += "obj.LookupByKey(key, x, rcv._tab.Bytes)\n";
     code += "\t}\n";
+    code += "\treturn false\n";
+    code += "}\n\n";
+  }
+
+  // Get the value of a vector's union.
+  void GetMemberOfVectorOfUnion(const StructDef &struct_def,
+                                const FieldDef &field, std::string *code_ptr) {
+    std::string &code = *code_ptr;
+    auto vectortype = field.value.type.VectorType();
+
+    GenReceiver(struct_def, code_ptr);
+    code += " " + namer_.Function(field);
+    code += "(j int, obj *flatbuffers.Table) bool ";
+    code += OffsetPrefix(field);
+    code += "\t\ta := rcv._tab.Vector(o)\n";
+    code += "\t\trcv._tab.UnionVector(obj, a, flatbuffers.UOffsetT(j*" +
+            NumToString(InlineSize(vectortype)) + "))";
+    code += "\n\t\treturn true\n";
+    code += "\n\t}\n";
     code += "\treturn false\n";
     code += "}\n\n";
   }
@@ -623,6 +688,29 @@ class GoGenerator : public BaseGenerator {
         // a nested struct, prefix the name with the field name.
         StructBuilderArgs(*field.value.type.struct_def,
                           (nameprefix + (field.name + "_")).c_str(), code_ptr);
+      } else if (IsArray(field.value.type)) {
+        std::string &code = *code_ptr;
+        if (field.value.type.struct_def != nullptr) {
+          for (int i = 0; i < field.value.type.fixed_length; ++i) {
+            StructBuilderArgs(
+                *field.value.type.struct_def,
+                (nameprefix +
+                 namer_.Variable(field.name + std::to_string(i) + "_"))
+                    .c_str(),
+                code_ptr);
+          }
+          continue;
+        }
+
+        code += std::string(", ") + nameprefix;
+        code += namer_.Variable(field);
+        code += " [" + std::to_string(field.value.type.fixed_length) + "]";
+
+        if (field.value.type.enum_def != nullptr) {
+          code += TypeName(field);
+        } else {
+          code += GenTypeBasic(field.value.type.element);
+        }
       } else {
         std::string &code = *code_ptr;
         code += std::string(", ") + nameprefix;
@@ -648,11 +736,29 @@ class GoGenerator : public BaseGenerator {
     for (auto it = struct_def.fields.vec.rbegin();
          it != struct_def.fields.vec.rend(); ++it) {
       auto &field = **it;
-      if (field.padding)
+      if (field.padding) {
         code += "\tbuilder.Pad(" + NumToString(field.padding) + ")\n";
+      }
       if (IsStruct(field.value.type)) {
         StructBuilderBody(*field.value.type.struct_def,
                           (nameprefix + (field.name + "_")).c_str(), code_ptr);
+      } else if (IsArray(field.value.type)) {
+        BaseType t = field.value.type.element;
+        for (int i = 0; i < field.value.type.fixed_length; ++i) {
+          if (field.value.type.struct_def != nullptr) {
+            StructBuilderBody(
+                *field.value.type.struct_def,
+                (nameprefix + namer_.Variable(field) + std::to_string(i) + "_")
+                    .c_str(),
+                code_ptr);
+
+            continue;
+          }
+          code += "\tbuilder.Prepend" + namer_.Method(GenTypeBasic(t)) + "(";
+          code += GenTypeBasic(t) + "(";
+          code += nameprefix + namer_.Variable(field) + "[" +
+                  std::to_string(i) + "]" + "))\n";
+        }
       } else {
         code += "\tbuilder.Prepend" + GenMethod(field) + "(";
         code += CastToBaseType(field.value.type,
@@ -747,7 +853,7 @@ class GoGenerator : public BaseGenerator {
 
   // Generate a struct field getter, conditioned on its child type(s).
   void GenStructAccessor(const StructDef &struct_def, const FieldDef &field,
-                         std::string *code_ptr) {
+                         const FieldDef *union_field, std::string *code_ptr) {
     GenComment(field.doc_comment, code_ptr, nullptr, "");
     if (IsScalar(field.value.type.base_type)) {
       if (struct_def.fixed) {
@@ -777,12 +883,15 @@ class GoGenerator : public BaseGenerator {
                 vectortype.struct_def->has_key) {
               GetMemberOfVectorOfStructByKey(struct_def, field, code_ptr);
             }
+          } else if (vectortype.base_type == BASE_TYPE_UNION) {
+            GetMemberOfVectorOfUnion(struct_def, field, code_ptr);
           } else {
             GetMemberOfVectorOfNonStruct(struct_def, field, code_ptr);
           }
           break;
         }
         case BASE_TYPE_UNION: GetUnionField(struct_def, field, code_ptr); break;
+        case BASE_TYPE_ARRAY: GetArrayField(struct_def, field, code_ptr); break;
         default: FLATBUFFERS_ASSERT(0);
       }
     }
@@ -847,6 +956,7 @@ class GoGenerator : public BaseGenerator {
 
   // Generate a struct field setter, conditioned on its child type(s).
   void GenStructMutator(const StructDef &struct_def, const FieldDef &field,
+                        const FieldDef * /*union_field*/,
                         std::string *code_ptr) {
     GenComment(field.doc_comment, code_ptr, nullptr, "");
     if (IsScalar(field.value.type.base_type)) {
@@ -886,6 +996,7 @@ class GoGenerator : public BaseGenerator {
     if (struct_def.generated) return;
 
     cur_name_space_ = struct_def.defined_namespace;
+    cur_declaration_file_ = *struct_def.declaration_file;
 
     GenComment(struct_def.doc_comment, code_ptr, nullptr);
     if (parser_.opts.generate_object_based_api) {
@@ -909,8 +1020,10 @@ class GoGenerator : public BaseGenerator {
       auto &field = **it;
       if (field.deprecated) continue;
 
-      GenStructAccessor(struct_def, field, code_ptr);
-      GenStructMutator(struct_def, field, code_ptr);
+      const bool is_union = field.value.type.base_type == BASE_TYPE_UTYPE;
+      flatbuffers::FieldDef *union_field = is_union ? *(it + 1) : nullptr;
+      GenStructAccessor(struct_def, field, union_field, code_ptr);
+      GenStructMutator(struct_def, field, union_field, code_ptr);
       // TODO(michaeltle): Support querying fixed struct by key. Currently,
       // we only support keyed tables.
       if (!struct_def.fixed && field.key) {
@@ -1354,6 +1467,7 @@ class GoGenerator : public BaseGenerator {
 
     auto max_name_length = MaxNameLength(enum_def);
     cur_name_space_ = enum_def.defined_namespace;
+    cur_declaration_file_ = *enum_def.declaration_file;
 
     GenComment(enum_def.doc_comment, code_ptr, nullptr);
     GenEnumType(enum_def, code_ptr);
@@ -1388,6 +1502,7 @@ class GoGenerator : public BaseGenerator {
       case BASE_TYPE_STRING: return "rcv._tab.ByteVector";
       case BASE_TYPE_UNION: return "rcv._tab.Union";
       case BASE_TYPE_VECTOR: return GenGetter(type.VectorType());
+      case BASE_TYPE_ARRAY: return GenGetter(type.VectorType());
       default: return "rcv._tab.Get" + namer_.Function(GenTypeBasic(type));
     }
   }
@@ -1399,7 +1514,7 @@ class GoGenerator : public BaseGenerator {
                : (IsStruct(field.value.type) ? "Struct" : "UOffsetT");
   }
 
-  std::string GenTypeBasic(const Type &type) {
+  std::string GenTypeBasic(BaseType base_type) {
     // clang-format off
     static const char *ctypename[] = {
       #define FLATBUFFERS_TD(ENUM, IDLTYPE, CTYPE, JTYPE, GTYPE, ...) \
@@ -1408,7 +1523,11 @@ class GoGenerator : public BaseGenerator {
       #undef FLATBUFFERS_TD
     };
     // clang-format on
-    return ctypename[type.base_type];
+    return ctypename[base_type];
+  }
+
+  std::string GenTypeBasic(const Type &type) {
+    return GenTypeBasic(type.base_type);
   }
 
   std::string GenTypePointer(const Type &type) {
@@ -1522,7 +1641,7 @@ class GoGenerator : public BaseGenerator {
 
   // Begin by declaring namespace and imports.
   void BeginFile(const std::string &name_space_name, const bool needs_imports,
-                 const bool is_enum, std::string *code_ptr) {
+                 std::string *code_ptr) {
     std::string &code = *code_ptr;
     code = code +
            "// Code generated by the FlatBuffers compiler. DO NOT EDIT.\n\n";
@@ -1531,14 +1650,16 @@ class GoGenerator : public BaseGenerator {
       code += "import (\n";
       // standard imports, in alphabetical order for go fmt
       if (needs_bytes_import_) code += "\t\"bytes\"\n";
-      if (!parser_.opts.go_import.empty()) {
-        code += "\tflatbuffers \"" + parser_.opts.go_import + "\"\n";
-      } else {
-        code += "\tflatbuffers \"github.com/google/flatbuffers/go\"\n";
+      if (needs_flatbuffers_import_) {
+        if (!parser_.opts.go_import.empty()) {
+          code += "\tflatbuffers \"" + parser_.opts.go_import + "\"\n";
+        } else {
+          code += "\tflatbuffers \"github.com/google/flatbuffers/go\"\n";
+        }
       }
       // math is needed to support non-finite scalar default values.
       if (needs_math_import_) { code += "\t\"math\"\n"; }
-      if (is_enum) { code += "\t\"strconv\"\n"; }
+      if (needs_strconv_import_) { code += "\t\"strconv\"\n"; }
 
       if (tracked_imported_namespaces_.size() > 0) {
         code += "\n";
@@ -1547,15 +1668,14 @@ class GoGenerator : public BaseGenerator {
           if ((*it)->defined_namespace->components.empty()) {
             code += "\t" + (*it)->name + " \"" + (*it)->name + "\"\n";
           } else {
-            code += "\t" + NamespaceImportName((*it)->defined_namespace) +
-                    " \"" + NamespaceImportPath((*it)->defined_namespace) +
-                    "\"\n";
+            code += "\t" + DefinitionImportName((*it)) + " \"" +
+                    DefinitionImportPath(*it) + "\"\n";
           }
         }
       }
       code += ")\n\n";
     } else {
-      if (is_enum) { code += "import \"strconv\"\n\n"; }
+      if (needs_strconv_import_) { code += "import \"strconv\"\n\n"; }
       if (needs_math_import_) {
         // math is needed to support non-finite scalar default values.
         code += "import \"math\"\n\n";
@@ -1568,18 +1688,20 @@ class GoGenerator : public BaseGenerator {
     tracked_imported_namespaces_.clear();
     needs_bytes_import_ = false;
     needs_math_import_ = false;
+    needs_flatbuffers_import_ = false;
+    needs_strconv_import_ = false;
   }
 
   // Save out the generated code for a Go Table type.
   bool SaveType(const Definition &def, const std::string &classcode,
-                const bool needs_imports, const bool is_enum) {
+                const bool needs_imports) {
     if (!classcode.length()) return true;
 
     Namespace &ns = go_namespace_.components.empty() ? *def.defined_namespace
                                                      : go_namespace_;
     std::string code = "";
     BeginFile(ns.components.empty() ? def.name : LastNamespacePart(ns),
-              needs_imports, is_enum, &code);
+              needs_imports, &code);
     code += classcode;
     // Strip extra newlines at end of file to make it gofmt-clean.
     while (code.length() > 2 && code.substr(code.length() - 2) == "\n\n") {
@@ -1592,15 +1714,35 @@ class GoGenerator : public BaseGenerator {
     return SaveFile(filename.c_str(), code, false);
   }
 
+  std::filesystem::path DefinitionRelativeDir(const Definition *def) const {
+    auto rel_path =
+        FilePath(parser_.opts.project_root, parser_.file_being_parsed_,
+                 parser_.opts.binary_schema_absolute_paths);
+    auto workspace_root =
+        rel_path.substr(0, rel_path.size() - parser_.file_being_parsed_.size());
+
+    auto decl_file = std::string(*def->declaration_file);
+    decl_file = decl_file.substr(workspace_root.size());
+
+    return std::filesystem::path(decl_file).parent_path();
+  }
+
   // Create the full name of the imported namespace (format: A__B__C).
-  std::string NamespaceImportName(const Namespace *ns) const {
-    return namer_.Namespace(*ns);
+  std::string DefinitionImportName(const Definition *def) const {
+    auto decl_dir = DefinitionRelativeDir(def);
+    std::vector<std::string> elements;
+    for (const auto &e : decl_dir) { elements.push_back(e); }
+    elements.push_back(def->defined_namespace->components.back());
+    return namer_.Namespace(elements);
   }
 
   // Create the full path for the imported namespace (format: A/B/C).
-  std::string NamespaceImportPath(const Namespace *ns) const {
+  std::string DefinitionImportPath(const flatbuffers::Definition *def) const {
+    auto decl_dir = DefinitionRelativeDir(def).string();
+
     std::string path =
-        namer_.Directories(*ns, SkipDir::OutputPathAndTrailingPathSeparator);
+        decl_dir + "/" + def->defined_namespace->components.back();
+
     if (!parser_.opts.go_module_name.empty()) {
       path = parser_.opts.go_module_name + "/" + path;
     }
@@ -1611,15 +1753,26 @@ class GoGenerator : public BaseGenerator {
   // used outside of its namespace.
   std::string WrapInNameSpaceAndTrack(const Definition *def,
                                       const std::string &name) {
-    if (CurrentNameSpace() == def->defined_namespace) return name;
+    if (CurrentNameSpace()->components.back() ==
+            def->defined_namespace->components.back() &&
+        std::filesystem::path(*CurrentDeclarationFile()).parent_path() ==
+            std::filesystem::path(*def->declaration_file).parent_path()) {
+      return name;
+    }
     tracked_imported_namespaces_.insert(def);
+    for (auto it = tracked_imported_namespaces_.begin();
+         it != tracked_imported_namespaces_.end(); ++it) {}
+
     if (def->defined_namespace->components.empty())
       return def->name + "." + name;
     else
-      return NamespaceImportName(def->defined_namespace) + "." + name;
+      return DefinitionImportName(def) + "." + name;
   }
 
   const Namespace *CurrentNameSpace() const { return cur_name_space_; }
+  const std::string *CurrentDeclarationFile() const {
+    return &cur_declaration_file_;
+  }
 
   static size_t MaxNameLength(const EnumDef &enum_def) {
     size_t max = 0;
