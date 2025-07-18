@@ -126,7 +126,7 @@ inline void IterateValue(ElementaryType type, const uint8_t *val,
                          const char *default_value, bool is_repeating) {
   if (!val && default_value) {
     const bool quoteable =
-        (type == ElementaryType::ET_STRING &&
+        (!is_repeating && type == ElementaryType::ET_STRING &&
          default_value != std::string("null")) ||
         (!is_repeating && type_table && type_table->st == ST_ENUM) ||
         (!is_repeating && type_table && type_table->st == ST_UNION &&
