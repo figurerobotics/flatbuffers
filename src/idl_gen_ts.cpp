@@ -257,7 +257,7 @@ class TsGenerator : public BaseGenerator {
     for (const auto &it : ns_defs_) {
       code = "// " + std::string(FlatBuffersGeneratedWarning()) + "\n\n" +
         "/* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */\n\n";
-      
+
       // export all definitions in ns entry point module
       int export_counter = 0;
       for (const auto &def : it.second.definitions) {
@@ -461,8 +461,10 @@ class TsGenerator : public BaseGenerator {
             std::string enum_name =
                 AddImport(imports, *value.type.enum_def, *value.type.enum_def)
                     .name;
-            std::string enum_value = namer_.Variant(
-                *value.type.enum_def->FindByValue(value.constant));
+            EnumVal *val = value.type.enum_def->FindByValue(value.constant);
+            if (val == nullptr)
+              val = const_cast<EnumVal *>(value.type.enum_def->MinValue());
+            std::string enum_value = namer_.Variant(*val);
             ret += enum_name + "." + enum_value +
                    (i < value.type.fixed_length - 1 ? ", " : "");
           }
@@ -567,7 +569,7 @@ class TsGenerator : public BaseGenerator {
 
   static Type GetUnionUnderlyingType(const Type &type)
   {
-    if (type.enum_def != nullptr && 
+    if (type.enum_def != nullptr &&
         type.enum_def->underlying_type.base_type != type.base_type) {
       return type.enum_def->underlying_type;
     } else {
