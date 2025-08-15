@@ -20,6 +20,7 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -177,6 +178,13 @@ class TsGenerator : public BaseGenerator {
     std::string path;
     std::string filepath;
     std::string symbolic_name;
+
+    std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " TrackNsDef() called for type: " << type_name << std::endl;
+    std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " namespace components size: " << definition.defined_namespace->components.size() << std::endl;
+    for (size_t i = 0; i < definition.defined_namespace->components.size(); ++i) {
+      std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " component[" << i << "]: '" << definition.defined_namespace->components[i] << "'" << std::endl;
+    }
+
     if (definition.defined_namespace->components.size() > 0) {
       path = namer_.Directories(*definition.defined_namespace,
                                 SkipDir::TrailingPathSeperator);
@@ -184,10 +192,12 @@ class TsGenerator : public BaseGenerator {
       path = namer_.Directories(*definition.defined_namespace,
                                 SkipDir::OutputPathAndTrailingPathSeparator);
       symbolic_name = definition.defined_namespace->components.back();
+      std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " namespaced - path: '" << path << "', filepath: '" << filepath << "', symbolic_name: '" << symbolic_name << "'" << std::endl;
     } else {
       auto def_mod_name = namer_.File(definition, SkipFile::SuffixAndExtension);
       symbolic_name = file_name_;
       filepath = path_ + symbolic_name + ".ts";
+      std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " root - path: '" << path << "', filepath: '" << filepath << "', symbolic_name: '" << symbolic_name << "'" << std::endl;
     }
     if (ns_defs_.count(path) == 0) {
       NsDefinition nsDef;
@@ -243,18 +253,37 @@ class TsGenerator : public BaseGenerator {
   void generateEntry() {
     std::string code;
 
+    // Debug: Print namespace definitions before processing
+    std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " generateEntry() - ns_defs_ size: " << ns_defs_.size() << std::endl;
+    for (const auto &ns_def : ns_defs_) {
+      std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " ns_def path: '" << ns_def.first << "', filepath: '" << ns_def.second.filepath << "'" << std::endl;
+      std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " ns components size: " << ns_def.second.ns->components.size() << std::endl;
+      for (size_t i = 0; i < ns_def.second.ns->components.size(); ++i) {
+        std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " component[" << i << "]: '" << ns_def.second.ns->components[i] << "'" << std::endl;
+      }
+      std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " definitions count: " << ns_def.second.definitions.size() << std::endl;
+    }
+
     // add root namespace def if not already existing from defs tracking
     std::string root;
+    std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " Checking if root namespace exists, ns_defs_.count(root): " << ns_defs_.count(root) << std::endl;
     if (ns_defs_.count(root) == 0) {
+      std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " Adding root namespace definition" << std::endl;
       NsDefinition nsDef;
       nsDef.path = root;
       nsDef.symbolic_name = file_name_;
       nsDef.filepath = path_ + file_name_ + ".ts";
       nsDef.ns = new Namespace();
       ns_defs_[nsDef.path] = nsDef;
+    } else {
+      std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " Root namespace already exists, not adding" << std::endl;
     }
 
+
+
     for (const auto &it : ns_defs_) {
+      std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " Processing namespace: path='" << it.first << "', filepath='" << it.second.filepath << "'" << std::endl;
+
       code = "// " + std::string(FlatBuffersGeneratedWarning()) + "\n\n" +
         "/* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */\n\n";
 
@@ -299,6 +328,7 @@ class TsGenerator : public BaseGenerator {
 
       // re-export child namespace(s) in parent
       const auto child_ns_level = it.second.ns->components.size() + 1;
+      int child_namespace_exports = 0;
       for (const auto &it2 : ns_defs_) {
         if (it2.second.ns->components.size() != child_ns_level) continue;
         auto ts_file_path = it2.second.path + ".ts";
@@ -306,9 +336,44 @@ class TsGenerator : public BaseGenerator {
         std::string rel_path = it2.second.path;
         code += rel_path + ".js';\n";
         export_counter++;
+        child_namespace_exports++;
+        std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " Adding child namespace export: " << it2.second.symbolic_name << " from ./" << rel_path << std::endl;
       }
 
-      if (export_counter > 0) SaveFile(it.second.filepath.c_str(), code, false);
+      // For root namespace (empty path), only export top-level namespaces if no child namespace exports were added
+      if (it.first.empty() && child_namespace_exports == 0) {
+        std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " Processing root namespace, checking for top-level namespaces to export" << std::endl;
+
+        // Collect unique top-level namespace names
+        std::set<std::string> top_level_namespaces;
+        for (const auto &it2 : ns_defs_) {
+          if (!it2.second.ns->components.empty()) {
+            top_level_namespaces.insert(it2.second.ns->components[0]);
+          }
+        }
+
+        // Export each top-level namespace by finding the actual namespace path
+        for (const std::string &top_ns : top_level_namespaces) {
+          // Find the actual path for this top-level namespace
+          for (const auto &it2 : ns_defs_) {
+            if (!it2.second.ns->components.empty() && it2.second.ns->components[0] == top_ns) {
+              std::string import_extension = parser_.opts.ts_no_import_ext ? "" : ".js";
+              code += "export * as " + top_ns + " from './" + it2.second.path + import_extension + "';\n";
+              export_counter++;
+              std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " Adding top-level namespace export: " << top_ns << " from ./" << it2.second.path << std::endl;
+              break; // Only need the first match for each top-level namespace
+            }
+          }
+        }
+      }
+
+      std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " export_counter=" << export_counter << " for namespace path='" << it.first << "'" << std::endl;
+      if (export_counter > 0) {
+        std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " Saving file: " << it.second.filepath << std::endl;
+        SaveFile(it.second.filepath.c_str(), code, false);
+      } else {
+        std::cout << "DEBUG: " << __FILE__ << ":" << __LINE__ << " Not saving file (export_counter=0): " << it.second.filepath << std::endl;
+      }
     }
   }
 
