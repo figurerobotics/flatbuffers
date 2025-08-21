@@ -63,7 +63,7 @@ Namer::Config TypeScriptDefaultConfig() {
            /*enum_variant_seperator=*/"::",
            /*escape_keywords=*/Namer::Config::Escape::AfterConvertingCase,
            /*namespaces=*/Case::kKeep,
-           /*namespace_seperator=*/"_",
+           /*namespace_seperator=*/".",
            /*object_prefix=*/"",
            /*object_suffix=*/"T",
            /*keyword_prefix=*/"",
@@ -112,10 +112,7 @@ class TsGenerator : public BaseGenerator {
                TypescriptKeywords()) {}
 
   bool generate() {
-    generateEnums();
-    generateStructs();
-    if (!parser_.opts.ts_omit_entrypoint) { generateEntry(); }
-    if (!generateBundle()) return false;
+    generatePerFileStructure();
     return true;
   }
 
@@ -219,7 +216,11 @@ class TsGenerator : public BaseGenerator {
  private:
   IdlNamer namer_;
 
-  std::map<std::string, NsDefinition> ns_defs_;
+    std::map<std::string, NsDefinition> ns_defs_;
+
+  // Group definitions by source file
+  std::map<std::string, std::vector<const EnumDef*>> enums_by_file_;
+  std::map<std::string, std::vector<const StructDef*>> structs_by_file_;
 
   // Generate code for all enums.
   void generateEnums() {
@@ -391,6 +392,182 @@ class TsGenerator : public BaseGenerator {
       std::cout << "> " << cmd << std::endl;
     }
     return true;
+  }
+
+  // Generate one TypeScript file per source .fbs file
+  void generatePerFileStructure() {
+    // Group all definitions by their source file
+    groupDefinitionsByFile();
+
+    // Collect all unique source files
+    std::set<std::string> all_files;
+    for (const auto& file_pair : enums_by_file_) {
+      all_files.insert(file_pair.first);
+    }
+    for (const auto& file_pair : structs_by_file_) {
+      all_files.insert(file_pair.first);
+    }
+
+    // Generate one .ts file per source .fbs file
+    for (const std::string& source_file : all_files) {
+      generateFileContent(source_file);
+    }
+  }
+
+  void groupDefinitionsByFile() {
+    // Group enums by file
+    for (auto it = parser_.enums_.vec.begin(); it != parser_.enums_.vec.end(); ++it) {
+      auto &enum_def = **it;
+      enums_by_file_[enum_def.file].push_back(&enum_def);
+    }
+
+    // Group structs by file
+    for (auto it = parser_.structs_.vec.begin(); it != parser_.structs_.vec.end(); ++it) {
+      auto &struct_def = **it;
+      structs_by_file_[struct_def.file].push_back(&struct_def);
+    }
+  }
+
+  void generateFileContent(const std::string& source_file) {
+    std::string accumulated_content;
+
+    // Add file header
+    accumulated_content += "// " + std::string(FlatBuffersGeneratedWarning()) + "\n\n";
+    accumulated_content += "/* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */\n\n";
+
+    // Add flatbuffers import
+    accumulated_content += "import * as flatbuffers from 'flatbuffers';\n";
+
+    // Add imports for definitions from other files
+    generateImportsForFile(source_file, accumulated_content);
+
+    // Process enums in the file
+    auto enum_it = enums_by_file_.find(source_file);
+    if (enum_it != enums_by_file_.end()) {
+      for (const EnumDef* enum_def : enum_it->second) {
+        // Generate enum
+        std::string enumcode;
+        import_set dummy_imports;  // Not used since everything is in same file
+        GenEnum(const_cast<EnumDef&>(*enum_def), &enumcode, dummy_imports, false);
+        GenEnum(const_cast<EnumDef&>(*enum_def), &enumcode, dummy_imports, true);
+
+        // Wrap in namespace
+        accumulateContentWithNamespace(*enum_def, enumcode, accumulated_content);
+      }
+    }
+
+    // Process structs in the file
+    auto struct_it = structs_by_file_.find(source_file);
+    if (struct_it != structs_by_file_.end()) {
+      for (const StructDef* struct_def : struct_it->second) {
+        // Generate struct/table
+        std::string declcode;
+        import_set dummy_imports;  // Not used since everything is in same file
+        GenStruct(parser_, const_cast<StructDef&>(*struct_def), &declcode, dummy_imports);
+
+        // Wrap in namespace
+        accumulateContentWithNamespace(*struct_def, declcode, accumulated_content);
+      }
+    }
+
+    // Generate output filename based on source file
+    std::string output_filename = generateOutputFilename(source_file);
+    SaveFile(output_filename.c_str(), accumulated_content, false);
+  }
+
+  void accumulateContentWithNamespace(const Definition &definition, const std::string &class_code, std::string &accumulated_content) {
+    if (class_code.empty()) return;
+
+    // Wrap in namespace declarations if the definition belongs to a namespace
+    std::string namespace_wrapper_start = "";
+    std::string namespace_wrapper_end = "";
+    if (definition.defined_namespace && !definition.defined_namespace->components.empty()) {
+      for (const auto &component : definition.defined_namespace->components) {
+        namespace_wrapper_start += "export namespace " + namer_.EscapeKeyword(component) + " {\n";
+        namespace_wrapper_end = "}\n" + namespace_wrapper_end;
+      }
+      namespace_wrapper_start += "\n";
+      namespace_wrapper_end = "\n" + namespace_wrapper_end;
+    }
+
+    accumulated_content += namespace_wrapper_start + class_code + namespace_wrapper_end + "\n";
+  }
+
+  void generateImportsForFile(const std::string& source_file, std::string &accumulated_content) {
+    std::set<std::string> imported_files;
+
+    // Collect dependencies from structs in this file
+    auto struct_it = structs_by_file_.find(source_file);
+    if (struct_it != structs_by_file_.end()) {
+      for (const StructDef* struct_def : struct_it->second) {
+        // Check field dependencies
+        for (const auto& field : struct_def->fields.vec) {
+          collectFileDependencies(field->value.type, source_file, imported_files);
+        }
+      }
+    }
+
+    // Generate import statements
+    for (const std::string& imported_file : imported_files) {
+      if (imported_file != source_file) {
+        std::string import_filename = generateImportPath(source_file, imported_file);
+        accumulated_content += "import * as " + generateImportAlias(imported_file) +
+                               " from '" + import_filename + "';\n";
+      }
+    }
+
+    if (!imported_files.empty()) {
+      accumulated_content += "\n";
+    }
+  }
+
+  void collectFileDependencies(const Type& type, const std::string& current_file, std::set<std::string>& imported_files) {
+    if (type.struct_def && type.struct_def->file != current_file) {
+      imported_files.insert(type.struct_def->file);
+    }
+    if (type.enum_def && type.enum_def->file != current_file) {
+      imported_files.insert(type.enum_def->file);
+    }
+
+    // Handle vector/array element types
+    if (type.base_type == BASE_TYPE_VECTOR || type.base_type == BASE_TYPE_ARRAY) {
+      Type element_type = type.VectorType();
+      collectFileDependencies(element_type, current_file, imported_files);
+    }
+  }
+
+  std::string generateImportPath(const std::string& current_file, const std::string& target_file) {
+    // Generate relative import path based on file structure
+    std::string target_base = flatbuffers::StripExtension(flatbuffers::StripPath(target_file));
+    return "./" + target_base + "_generated.js";
+  }
+
+  std::string generateImportAlias(const std::string& file) {
+    // Generate a valid TypeScript identifier from the file name
+    std::string base_name = flatbuffers::StripExtension(flatbuffers::StripPath(file));
+
+    // Convert to camelCase and ensure it's a valid identifier
+    std::string alias = "";
+    bool next_upper = false;
+    for (char c : base_name) {
+      if (c == '_' || c == '-' || c == '.') {
+        next_upper = true;
+      } else if (next_upper) {
+        alias += std::toupper(c);
+        next_upper = false;
+      } else {
+        alias += c;
+      }
+    }
+
+    return alias.empty() ? "imported" : alias;
+  }
+
+  std::string generateOutputFilename(const std::string& source_file) {
+    // Strip the .fbs extension and add _generated.ts
+    std::string base_name = flatbuffers::StripExtension(source_file);
+    std::string filename = flatbuffers::StripPath(base_name) + "_generated.ts";
+    return path_ + filename;
   }
 
   // Generate a documentation comment, if available.
@@ -975,92 +1152,27 @@ class TsGenerator : public BaseGenerator {
   template<typename DefinitionT>
   ImportDefinition AddImport(import_set &imports, const Definition &dependent,
                              const DefinitionT &dependency) {
-    // The unique name of the dependency, fully qualified in its namespace.
-    const std::string unique_name = GetTypeName(
-        dependency, /*object_api = */ false, /*force_ns_wrap=*/true);
-
-    // Look if we have already added this import and return its name if found.
-    const auto import_pair = imports.find(unique_name);
-    if (import_pair != imports.end()) { return import_pair->second; }
-
-    // Check if this name would have a name clash with another type. Just use
-    // the "base" name (properly escaped) without any namespacing applied.
-    const std::string import_name = GetTypeName(dependency);
-    const bool has_name_clash = CheckIfNameClashes(imports, import_name);
-
-    // If we have a name clash, use the unique name, otherwise use simple name.
-    std::string name = has_name_clash ? unique_name : import_name;
-
-    std::string object_name = GetTypeName(dependency, /*object_api=*/true);
-
-    // For cross-namespace references or when we have name clashes, use qualified names
-    if (dependency.defined_namespace && !dependency.defined_namespace->components.empty() &&
-        (has_name_clash ||
-         (dependent.defined_namespace &&
-          dependent.defined_namespace->GetFullyQualifiedName("") !=
-          dependency.defined_namespace->GetFullyQualifiedName("")))) {
-
-      // Build fully qualified object type name
-      std::string ns_prefix = "";
-      for (const auto &component : dependency.defined_namespace->components) {
-        if (!ns_prefix.empty()) ns_prefix += ".";
-        ns_prefix += namer_.EscapeKeyword(component);
-      }
-      object_name = ns_prefix + "." + object_name;
-    }
-
-    const std::string symbols_expression = GenSymbolExpression(
-        dependency, has_name_clash, import_name, name, object_name);
-
-    std::string bare_file_path;
-    std::string rel_file_path;
-    if (dependent.defined_namespace) {
-      const auto &dep_comps = dependent.defined_namespace->components;
-      for (size_t i = 0; i < dep_comps.size(); i++) {
-        rel_file_path += i == 0 ? ".." : (kPathSeparator + std::string(".."));
-      }
-      if (dep_comps.size() == 0) { rel_file_path += "."; }
-    } else {
-      rel_file_path += "..";
-    }
-
-    bare_file_path +=
-        kPathSeparator +
-        namer_.Directories(dependency.defined_namespace->components,
-                           SkipDir::OutputPath) +
-        namer_.File(dependency, SkipFile::SuffixAndExtension);
-    rel_file_path += bare_file_path;
-
+    // In per-file generation mode, use import aliases for cross-file references
     ImportDefinition import;
-    import.name = name;
-    import.object_name = object_name;
-    import.bare_file_path = bare_file_path;
-    import.rel_file_path = rel_file_path;
-    std::string import_extension = parser_.opts.ts_no_import_ext ? "" : ".js";
 
-    import.import_statement = "import { " + symbols_expression + " } from '" +
-                              rel_file_path + import_extension + "';";
+    if (dependent.file != dependency.file) {
+      // Cross-file reference: use import alias + qualified name
+      std::string import_alias = generateImportAlias(dependency.file);
+      std::string qualified_name = GetTypeName(dependency, /*object_api=*/false, /*force_ns_wrap=*/true);
+      std::string qualified_object_name = GetTypeName(dependency, /*object_api=*/true, /*force_ns_wrap=*/true);
 
-    // For cross-namespace references, use the fully qualified name
-    if (dependency.defined_namespace && !dependency.defined_namespace->components.empty() &&
-        dependent.defined_namespace &&
-        dependent.defined_namespace->GetFullyQualifiedName("") !=
-        dependency.defined_namespace->GetFullyQualifiedName("")) {
-      // Build fully qualified name for cross-namespace references
-      std::string ns_prefix = "";
-      for (const auto &component : dependency.defined_namespace->components) {
-        if (!ns_prefix.empty()) ns_prefix += ".";
-        ns_prefix += namer_.EscapeKeyword(component);
-      }
-      import.name = ns_prefix + "." + import_name;
+      import.name = import_alias + "." + qualified_name;
+      import.object_name = import_alias + "." + qualified_object_name;
+    } else {
+      // Same file reference: use qualified names directly
+      import.name = GetTypeName(dependency, /*object_api=*/false, /*force_ns_wrap=*/true);
+      import.object_name = GetTypeName(dependency, /*object_api=*/true, /*force_ns_wrap=*/true);
     }
 
-    import.export_statement = "export { " + symbols_expression + " } from '." +
-                              bare_file_path + import_extension + "';";
+    import.import_statement = "";  // Not used in per-file mode
+    import.export_statement = "";  // Not used in per-file mode
     import.dependency = &dependency;
     import.dependent = &dependent;
-
-    imports.insert(std::make_pair(unique_name, import));
 
     return import;
   }
@@ -1196,11 +1308,19 @@ class TsGenerator : public BaseGenerator {
       if (!is_array) {
         std::string conversion_function = GenUnionConvFuncName(enum_def);
 
-        // Check if we need to namespace-qualify the conversion function
-        if (enum_def.defined_namespace && !enum_def.defined_namespace->components.empty() &&
-            dependent.defined_namespace &&
-            dependent.defined_namespace->GetFullyQualifiedName("") !=
-            enum_def.defined_namespace->GetFullyQualifiedName("")) {
+        // Check if we need to namespace-qualify the conversion function for cross-file references
+        if (enum_def.file != dependent.file) {
+          std::string import_alias = generateImportAlias(enum_def.file);
+          std::string qualified_name = "";
+          for (const auto &component : enum_def.defined_namespace->components) {
+            if (!qualified_name.empty()) qualified_name += ".";
+            qualified_name += namer_.EscapeKeyword(component);
+          }
+          conversion_function = import_alias + "." + qualified_name + "." + conversion_function;
+        } else if (enum_def.defined_namespace && !enum_def.defined_namespace->components.empty() &&
+                   dependent.defined_namespace &&
+                   dependent.defined_namespace->GetFullyQualifiedName("") !=
+                   enum_def.defined_namespace->GetFullyQualifiedName("")) {
 
           // Build fully qualified function name
           std::string ns_prefix = "";
@@ -1224,11 +1344,19 @@ class TsGenerator : public BaseGenerator {
       } else {
         std::string conversion_function = GenUnionListConvFuncName(enum_def);
 
-        // Check if we need to namespace-qualify the conversion function
-        if (enum_def.defined_namespace && !enum_def.defined_namespace->components.empty() &&
-            dependent.defined_namespace &&
-            dependent.defined_namespace->GetFullyQualifiedName("") !=
-            enum_def.defined_namespace->GetFullyQualifiedName("")) {
+        // Check if we need to namespace-qualify the conversion function for cross-file references
+        if (enum_def.file != dependent.file) {
+          std::string import_alias = generateImportAlias(enum_def.file);
+          std::string qualified_name = "";
+          for (const auto &component : enum_def.defined_namespace->components) {
+            if (!qualified_name.empty()) qualified_name += ".";
+            qualified_name += namer_.EscapeKeyword(component);
+          }
+          conversion_function = import_alias + "." + qualified_name + "." + conversion_function;
+        } else if (enum_def.defined_namespace && !enum_def.defined_namespace->components.empty() &&
+                   dependent.defined_namespace &&
+                   dependent.defined_namespace->GetFullyQualifiedName("") !=
+                   enum_def.defined_namespace->GetFullyQualifiedName("")) {
 
           // Build fully qualified function name
           std::string ns_prefix = "";
