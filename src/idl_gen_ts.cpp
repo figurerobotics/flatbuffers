@@ -538,8 +538,12 @@ class TsGenerator : public BaseGenerator {
 
   std::string generateImportPath(const std::string& current_file, const std::string& target_file) {
     // Generate relative import path based on file structure
-    std::string target_base = flatbuffers::StripExtension(flatbuffers::StripPath(target_file));
-    return "./" + target_base + "_generated.js";
+    std::string current_dir = flatbuffers::StripFileName(current_file);
+    std::string target_base = flatbuffers::StripExtension(target_file);
+    std::string target_filename = flatbuffers::StripPath(target_base) + "_generated.js";
+    std::string target_dir = flatbuffers::StripFileName(target_base);
+
+    return target_dir + "/" + target_filename;
   }
 
   std::string generateImportAlias(const std::string& file) {
@@ -564,10 +568,16 @@ class TsGenerator : public BaseGenerator {
   }
 
   std::string generateOutputFilename(const std::string& source_file) {
-    // Strip the .fbs extension and add _generated.ts
+    // Preserve directory structure from source file
     std::string base_name = flatbuffers::StripExtension(source_file);
-    std::string filename = flatbuffers::StripPath(base_name) + "_generated.ts";
-    return path_ + filename;
+    std::string filename = base_name + "_generated.ts";
+    std::string full_path = path_ + filename;
+
+    // Ensure the directory exists
+    std::string dir = flatbuffers::StripFileName(full_path);
+    EnsureDirExists(dir);
+
+    return full_path;
   }
 
   // Generate a documentation comment, if available.
