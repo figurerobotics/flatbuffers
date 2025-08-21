@@ -165,7 +165,19 @@ class TsGenerator : public BaseGenerator {
     }
     if (!imports.empty()) code += "\n\n";
 
-    code += class_code;
+    // Wrap in namespace declarations if the definition belongs to a namespace
+    std::string namespace_wrapper_start = "";
+    std::string namespace_wrapper_end = "";
+    if (definition.defined_namespace && !definition.defined_namespace->components.empty()) {
+      for (const auto &component : definition.defined_namespace->components) {
+        namespace_wrapper_start += "export namespace " + namer_.EscapeKeyword(component) + " {\n";
+        namespace_wrapper_end = "}\n" + namespace_wrapper_end;
+      }
+      namespace_wrapper_start += "\n";
+      namespace_wrapper_end = "\n" + namespace_wrapper_end;
+    }
+
+    code += namespace_wrapper_start + class_code + namespace_wrapper_end;
 
     auto dirs = namer_.Directories(*definition.defined_namespace);
     EnsureDirExists(dirs);
@@ -290,11 +302,25 @@ class TsGenerator : public BaseGenerator {
         auto fully_qualified_type_name =
             it.second.ns->GetFullyQualifiedName(type_name);
         auto is_struct = parser_.structs_.Lookup(fully_qualified_type_name);
-        code += "export { " + type_name;
-        if (parser_.opts.generate_object_based_api && is_struct) {
-          code += ", " + type_name + parser_.opts.object_suffix;
+
+        // Build namespace path for export
+        std::string ns_path = "";
+        if (def.second->defined_namespace && !def.second->defined_namespace->components.empty()) {
+          for (const auto &component : def.second->defined_namespace->components) {
+            if (!ns_path.empty()) ns_path += ".";
+            ns_path += namer_.EscapeKeyword(component);
+          }
+          // Export the entire namespace from the file
+          code += "export { " + ns_path + " } from '";
+        } else {
+          // For non-namespaced types, use the original logic
+          code += "export { " + type_name;
+          if (parser_.opts.generate_object_based_api && is_struct) {
+            code += ", " + type_name + parser_.opts.object_suffix;
+          }
+          code += " } from '";
         }
-        code += " } from '";
+
         std::string import_extension =
             parser_.opts.ts_no_import_ext ? "" : ".js";
         code += base_name_rel + import_extension + "';\n";
@@ -867,21 +893,33 @@ class TsGenerator : public BaseGenerator {
                                   const std::string &object_name) {
     std::string symbols_expression;
 
+    // Build fully qualified type name for import if struct is in a namespace
+    std::string fully_qualified_type = import_name;
+    std::string fully_qualified_object = GetTypeName(struct_def, /*object_api =*/true);
+
+    if (struct_def.defined_namespace && !struct_def.defined_namespace->components.empty()) {
+      std::string ns_prefix = "";
+      for (const auto &component : struct_def.defined_namespace->components) {
+        if (!ns_prefix.empty()) ns_prefix += ".";
+        ns_prefix += namer_.EscapeKeyword(component);
+      }
+      fully_qualified_type = ns_prefix + "." + import_name;
+      fully_qualified_object = ns_prefix + "." + fully_qualified_object;
+    }
+
     if (has_name_clash) {
       // We have a name clash
-      symbols_expression += import_name + " as " + name;
+      symbols_expression += fully_qualified_type + " as " + name;
 
       if (parser_.opts.generate_object_based_api) {
-        symbols_expression += ", " +
-                              GetTypeName(struct_def, /*object_api =*/true) +
-                              " as " + object_name;
+        symbols_expression += ", " + fully_qualified_object + " as " + object_name;
       }
     } else {
-      // No name clash, use the provided name
-      symbols_expression += name;
+      // No name clash, use the fully qualified type name
+      symbols_expression += fully_qualified_type;
 
       if (parser_.opts.generate_object_based_api) {
-        symbols_expression += ", " + object_name;
+        symbols_expression += ", " + fully_qualified_object;
       }
     }
 
@@ -894,15 +932,41 @@ class TsGenerator : public BaseGenerator {
                                   const std::string &name,
                                   const std::string &) {
     std::string symbols_expression;
+
+    // Build fully qualified type name for import if enum is in a namespace
+    std::string fully_qualified_type = import_name;
+    if (enum_def.defined_namespace && !enum_def.defined_namespace->components.empty()) {
+      std::string ns_prefix = "";
+      for (const auto &component : enum_def.defined_namespace->components) {
+        if (!ns_prefix.empty()) ns_prefix += ".";
+        ns_prefix += namer_.EscapeKeyword(component);
+      }
+      fully_qualified_type = ns_prefix + "." + import_name;
+    }
+
     if (has_name_clash) {
-      symbols_expression += import_name + " as " + name;
+      symbols_expression += fully_qualified_type + " as " + name;
     } else {
-      symbols_expression += name;
+      symbols_expression += fully_qualified_type;
     }
 
     if (enum_def.is_union) {
-      symbols_expression += (", " + namer_.Function("unionTo" + name));
-      symbols_expression += (", " + namer_.Function("unionListTo" + name));
+      std::string union_functions = namer_.Function("unionTo" + import_name);
+      std::string union_list_functions = namer_.Function("unionListTo" + import_name);
+
+      // Add namespace qualification for union helper functions
+      if (enum_def.defined_namespace && !enum_def.defined_namespace->components.empty()) {
+        std::string ns_prefix = "";
+        for (const auto &component : enum_def.defined_namespace->components) {
+          if (!ns_prefix.empty()) ns_prefix += ".";
+          ns_prefix += namer_.EscapeKeyword(component);
+        }
+        union_functions = ns_prefix + "." + union_functions;
+        union_list_functions = ns_prefix + "." + union_list_functions;
+      }
+
+      symbols_expression += (", " + union_functions);
+      symbols_expression += (", " + union_list_functions);
     }
 
     return symbols_expression;
@@ -927,8 +991,23 @@ class TsGenerator : public BaseGenerator {
     // If we have a name clash, use the unique name, otherwise use simple name.
     std::string name = has_name_clash ? unique_name : import_name;
 
-    const std::string object_name =
-        GetTypeName(dependency, /*object_api=*/true, has_name_clash);
+    std::string object_name = GetTypeName(dependency, /*object_api=*/true);
+
+    // For cross-namespace references or when we have name clashes, use qualified names
+    if (dependency.defined_namespace && !dependency.defined_namespace->components.empty() &&
+        (has_name_clash ||
+         (dependent.defined_namespace &&
+          dependent.defined_namespace->GetFullyQualifiedName("") !=
+          dependency.defined_namespace->GetFullyQualifiedName("")))) {
+
+      // Build fully qualified object type name
+      std::string ns_prefix = "";
+      for (const auto &component : dependency.defined_namespace->components) {
+        if (!ns_prefix.empty()) ns_prefix += ".";
+        ns_prefix += namer_.EscapeKeyword(component);
+      }
+      object_name = ns_prefix + "." + object_name;
+    }
 
     const std::string symbols_expression = GenSymbolExpression(
         dependency, has_name_clash, import_name, name, object_name);
@@ -958,8 +1037,24 @@ class TsGenerator : public BaseGenerator {
     import.bare_file_path = bare_file_path;
     import.rel_file_path = rel_file_path;
     std::string import_extension = parser_.opts.ts_no_import_ext ? "" : ".js";
+
     import.import_statement = "import { " + symbols_expression + " } from '" +
                               rel_file_path + import_extension + "';";
+
+    // For cross-namespace references, use the fully qualified name
+    if (dependency.defined_namespace && !dependency.defined_namespace->components.empty() &&
+        dependent.defined_namespace &&
+        dependent.defined_namespace->GetFullyQualifiedName("") !=
+        dependency.defined_namespace->GetFullyQualifiedName("")) {
+      // Build fully qualified name for cross-namespace references
+      std::string ns_prefix = "";
+      for (const auto &component : dependency.defined_namespace->components) {
+        if (!ns_prefix.empty()) ns_prefix += ".";
+        ns_prefix += namer_.EscapeKeyword(component);
+      }
+      import.name = ns_prefix + "." + import_name;
+    }
+
     import.export_statement = "export { " + symbols_expression + " } from '." +
                               bare_file_path + import_extension + "';";
     import.dependency = &dependency;
@@ -996,8 +1091,8 @@ class TsGenerator : public BaseGenerator {
       if (IsString(ev.union_type)) {
         type = "string";  // no need to wrap string type in namespace
       } else if (ev.union_type.base_type == BASE_TYPE_STRUCT) {
-        type = AddImport(imports, dependent, *ev.union_type.struct_def)
-                   .object_name;
+        // Get the fully qualified object type name via AddImport
+        type = AddImport(imports, dependent, *ev.union_type.struct_def).object_name;
       } else {
         FLATBUFFERS_ASSERT(false);
       }
@@ -1099,7 +1194,22 @@ class TsGenerator : public BaseGenerator {
       std::string ret;
 
       if (!is_array) {
-        const auto conversion_function = GenUnionConvFuncName(enum_def);
+        std::string conversion_function = GenUnionConvFuncName(enum_def);
+
+        // Check if we need to namespace-qualify the conversion function
+        if (enum_def.defined_namespace && !enum_def.defined_namespace->components.empty() &&
+            dependent.defined_namespace &&
+            dependent.defined_namespace->GetFullyQualifiedName("") !=
+            enum_def.defined_namespace->GetFullyQualifiedName("")) {
+
+          // Build fully qualified function name
+          std::string ns_prefix = "";
+          for (const auto &component : enum_def.defined_namespace->components) {
+            if (!ns_prefix.empty()) ns_prefix += ".";
+            ns_prefix += namer_.EscapeKeyword(component);
+          }
+          conversion_function = ns_prefix + "." + conversion_function;
+        }
 
         ret = "(() => {\n";
         ret += "      const temp = " + conversion_function + "(this." +
@@ -1112,7 +1222,22 @@ class TsGenerator : public BaseGenerator {
         ret += "      return temp.unpack()\n";
         ret += "  })()";
       } else {
-        const auto conversion_function = GenUnionListConvFuncName(enum_def);
+        std::string conversion_function = GenUnionListConvFuncName(enum_def);
+
+        // Check if we need to namespace-qualify the conversion function
+        if (enum_def.defined_namespace && !enum_def.defined_namespace->components.empty() &&
+            dependent.defined_namespace &&
+            dependent.defined_namespace->GetFullyQualifiedName("") !=
+            enum_def.defined_namespace->GetFullyQualifiedName("")) {
+
+          // Build fully qualified function name
+          std::string ns_prefix = "";
+          for (const auto &component : enum_def.defined_namespace->components) {
+            if (!ns_prefix.empty()) ns_prefix += ".";
+            ns_prefix += namer_.EscapeKeyword(component);
+          }
+          conversion_function = ns_prefix + "." + conversion_function;
+        }
 
         ret = "(() => {\n";
         ret += "    const ret: (" +
