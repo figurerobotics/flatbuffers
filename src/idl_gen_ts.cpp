@@ -23,6 +23,7 @@
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
+#include <filesystem>
 
 #include "flatbuffers/code_generators.h"
 #include "flatbuffers/flatbuffers.h"
@@ -408,9 +409,32 @@ class TsGenerator : public BaseGenerator {
       all_files.insert(file_pair.first);
     }
 
-    // Generate one .ts file per source .fbs file
-    for (const std::string& source_file : all_files) {
-      generateFileContent(source_file);
+    // If ts_generate_all_files flag is set, generate all files (current behavior)
+    // Otherwise, only generate the main file being processed (new default behavior)
+    if (parser_.opts.ts_generate_all_files) {
+      // Generate one .ts file per source .fbs file
+      for (const std::string& source_file : all_files) {
+        generateFileContent(source_file);
+      }
+    } else {
+      // Only generate the main file - the one passed to flatc
+      // The main file name is stored in file_name_ (without extension)
+      std::string main_file_with_extension = file_name_ + ".fbs";
+
+      // Find the main file in the set of all files (it might have a path)
+      std::string main_file_to_generate;
+      for (const std::string& source_file : all_files) {
+        std::string basename = flatbuffers::StripPath(source_file);
+        if (basename == main_file_with_extension || source_file == main_file_with_extension) {
+          main_file_to_generate = source_file;
+          break;
+        }
+      }
+
+      // Generate only the main file if found
+      if (!main_file_to_generate.empty()) {
+        generateFileContent(main_file_to_generate);
+      }
     }
   }
 
@@ -447,9 +471,9 @@ class TsGenerator : public BaseGenerator {
       for (const EnumDef* enum_def : enum_it->second) {
         // Generate enum
         std::string enumcode;
-        import_set dummy_imports;  // Not used since everything is in same file
-        GenEnum(const_cast<EnumDef&>(*enum_def), &enumcode, dummy_imports, false);
-        GenEnum(const_cast<EnumDef&>(*enum_def), &enumcode, dummy_imports, true);
+        import_set imports;  // Use proper import set for cross-file references
+        GenEnum(const_cast<EnumDef&>(*enum_def), &enumcode, imports, false);
+        GenEnum(const_cast<EnumDef&>(*enum_def), &enumcode, imports, true);
 
         // Wrap in namespace
         accumulateContentWithNamespace(*enum_def, enumcode, accumulated_content);
@@ -462,8 +486,8 @@ class TsGenerator : public BaseGenerator {
       for (const StructDef* struct_def : struct_it->second) {
         // Generate struct/table
         std::string declcode;
-        import_set dummy_imports;  // Not used since everything is in same file
-        GenStruct(parser_, const_cast<StructDef&>(*struct_def), &declcode, dummy_imports);
+        import_set imports;  // Use proper import set for cross-file references
+        GenStruct(parser_, const_cast<StructDef&>(*struct_def), &declcode, imports);
 
         // Wrap in namespace
         accumulateContentWithNamespace(*struct_def, declcode, accumulated_content);
@@ -569,10 +593,9 @@ class TsGenerator : public BaseGenerator {
 
   std::string generateOutputFilename(const std::string& source_file) {
     // Preserve directory structure from source file
-    std::string base_name = flatbuffers::StripExtension(source_file);
+    std::string base_name = flatbuffers::StripExtension(flatbuffers::StripPath(source_file));
     std::string filename = base_name + "_generated.ts";
     std::string full_path = path_ + filename;
-
     // Ensure the directory exists
     std::string dir = flatbuffers::StripFileName(full_path);
     EnsureDirExists(dir);
@@ -693,7 +716,7 @@ class TsGenerator : public BaseGenerator {
 
   std::string GenBBAccess() const { return "this.bb!"; }
 
-  std::string GenDefaultValue(const FieldDef &field, import_set &imports) {
+  std::string GenDefaultValue(const FieldDef &field, import_set &imports, const Definition *dependent = nullptr) {
     if (field.IsScalarOptional()) { return "null"; }
 
     const auto &value = field.value;
@@ -703,9 +726,12 @@ class TsGenerator : public BaseGenerator {
         case BASE_TYPE_ARRAY: {
           std::string ret = "[";
           for (auto i = 0; i < value.type.fixed_length; ++i) {
-            std::string enum_name =
-                AddImport(imports, *value.type.enum_def, *value.type.enum_def)
-                    .name;
+            std::string enum_name;
+            if (dependent) {
+              enum_name = AddImport(imports, *dependent, *value.type.enum_def).name;
+            } else {
+              enum_name = GetTypeName(*value.type.enum_def, /*object_api=*/false, /*force_ns_wrap=*/true);
+            }
             EnumVal *val = value.type.enum_def->FindByValue(value.constant);
             if (val == nullptr)
               val = const_cast<EnumVal *>(value.type.enum_def->MinValue());
@@ -727,9 +753,14 @@ class TsGenerator : public BaseGenerator {
           EnumVal *val = value.type.enum_def->FindByValue(value.constant);
           if (val == nullptr)
             val = const_cast<EnumVal *>(value.type.enum_def->MinValue());
-          return AddImport(imports, *value.type.enum_def, *value.type.enum_def)
-                     .name +
-                 "." + namer_.Variant(*val);
+
+          std::string enum_name;
+          if (dependent) {
+            enum_name = AddImport(imports, *dependent, *value.type.enum_def).name;
+          } else {
+            enum_name = GetTypeName(*value.type.enum_def, /*object_api=*/false, /*force_ns_wrap=*/true);
+          }
+          return enum_name + "." + namer_.Variant(*val);
         }
       }
     }
@@ -1050,7 +1081,13 @@ class TsGenerator : public BaseGenerator {
       if (IsString(ev.union_type)) {
         type = "string";  // no need to wrap string type in namespace
       } else if (ev.union_type.base_type == BASE_TYPE_STRUCT) {
-        type = AddImport(imports, union_enum, *ev.union_type.struct_def).name;
+        // Add safety check for null struct_def pointer
+        if (ev.union_type.struct_def) {
+          type = AddImport(imports, union_enum, *ev.union_type.struct_def).name;
+        } else {
+          // Fallback for invalid struct_def pointer
+          type = "any"; // Use 'any' type as fallback
+        }
       } else {
         FLATBUFFERS_ASSERT(false);
       }
@@ -1164,7 +1201,6 @@ class TsGenerator : public BaseGenerator {
                              const DefinitionT &dependency) {
     // In per-file generation mode, use import aliases for cross-file references
     ImportDefinition import;
-
     if (dependent.file != dependency.file) {
       // Cross-file reference: use import alias + qualified name
       std::string import_alias = generateImportAlias(dependency.file);
@@ -1214,7 +1250,13 @@ class TsGenerator : public BaseGenerator {
         type = "string";  // no need to wrap string type in namespace
       } else if (ev.union_type.base_type == BASE_TYPE_STRUCT) {
         // Get the fully qualified object type name via AddImport
-        type = AddImport(imports, dependent, *ev.union_type.struct_def).object_name;
+        // Add safety check for null struct_def pointer
+        if (ev.union_type.struct_def) {
+          type = AddImport(imports, dependent, *ev.union_type.struct_def).object_name;
+        } else {
+          // Fallback for invalid struct_def pointer
+          type = "any"; // Use 'any' type as fallback
+        }
       } else {
         FLATBUFFERS_ASSERT(false);
       }
@@ -1267,8 +1309,11 @@ class TsGenerator : public BaseGenerator {
           if (IsString(ev.union_type)) {
             ret += "return " + accessor_str + "'') as string;";
           } else if (ev.union_type.base_type == BASE_TYPE_STRUCT) {
-            const auto type =
-                AddImport(imports, enum_def, *ev.union_type.struct_def).name;
+            // Add safety check for null struct_def pointer
+            std::string type = "any"; // Default fallback
+            if (ev.union_type.struct_def) {
+              type = AddImport(imports, enum_def, *ev.union_type.struct_def).name;
+            }
             ret += "return " + accessor_str + "new " + type + "())! as " +
                    type + ";";
           } else {
@@ -1379,7 +1424,8 @@ class TsGenerator : public BaseGenerator {
 
         ret = "(() => {\n";
         ret += "    const ret: (" +
-               GenObjApiUnionTypeTS(imports, *union_type.struct_def,
+               GenObjApiUnionTypeTS(imports,
+                                    union_type.struct_def ? *union_type.struct_def : dependent,
                                     parser_.opts, *union_type.enum_def) +
                ")[] = [];\n";
         ret += "    for(let targetEnumIndex = 0; targetEnumIndex < this." +
@@ -1516,7 +1562,7 @@ class TsGenerator : public BaseGenerator {
       // a string that contains values for things that can be created inline or
       // the variable name from field_offset_decl
       std::string field_offset_val;
-      const auto field_default_val = GenDefaultValue(field, imports);
+      const auto field_default_val = GenDefaultValue(field, imports, &struct_def);
 
       // Emit a scalar field
       const auto is_string = IsString(field.value.type);
@@ -1955,7 +2001,7 @@ class TsGenerator : public BaseGenerator {
           code +=
               offset_prefix + GenGetter(field.value.type, "(" + index + ")");
           if (field.value.type.base_type != BASE_TYPE_ARRAY) {
-            code += " : " + GenDefaultValue(field, imports);
+            code += " : " + GenDefaultValue(field, imports, &struct_def);
           }
           code += ";\n";
         }
@@ -2064,7 +2110,13 @@ class TsGenerator : public BaseGenerator {
               default: {
                 if (IsScalar(field.value.type.element)) {
                   if (field.value.type.enum_def) {
-                    code += field.value.constant;
+                    // Generate qualified enum reference instead of raw constant
+                    const auto *enum_def = field.value.type.enum_def;
+                    EnumVal *val = enum_def->FindByValue(field.value.constant);
+                    if (val == nullptr)
+                      val = const_cast<EnumVal *>(enum_def->MinValue());
+                    std::string enum_name = AddImport(imports, struct_def, *enum_def).name;
+                    code += " : " + enum_name + "." + namer_.Variant(*val);
                   } else {
                     code += " : 0";
                   }
@@ -2146,7 +2198,13 @@ class TsGenerator : public BaseGenerator {
               code += "BigInt(0)";
             } else if (IsScalar(field.value.type.element)) {
               if (field.value.type.enum_def) {
-                code += field.value.constant;
+                // Generate qualified enum reference instead of raw constant
+                const auto *enum_def = field.value.type.enum_def;
+                EnumVal *val = enum_def->FindByValue(field.value.constant);
+                if (val == nullptr)
+                  val = const_cast<EnumVal *>(enum_def->MinValue());
+                std::string enum_name = AddImport(imports, struct_def, *enum_def).name;
+                code += enum_name + "." + namer_.Variant(*val);
               } else {
                 code += "0";
               }
@@ -2304,7 +2362,7 @@ class TsGenerator : public BaseGenerator {
           code += "null";
         } else {
           if (field.value.type.base_type == BASE_TYPE_BOOL) { code += "+"; }
-          code += GenDefaultValue(field, imports);
+          code += GenDefaultValue(field, imports, &struct_def);
         }
         code += ");\n}\n\n";
 

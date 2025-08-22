@@ -703,6 +703,7 @@ struct IDLOptions {
   bool ts_flat_files;
   bool ts_entry_points;
   bool ts_no_import_ext;
+  bool ts_generate_all_files;
   bool no_leak_private_annotations;
   bool require_json_eof;
   bool keep_proto_id;
@@ -846,6 +847,7 @@ struct IDLOptions {
         ts_flat_files(false),
         ts_entry_points(false),
         ts_no_import_ext(false),
+        ts_generate_all_files(false),
         no_leak_private_annotations(false),
         require_json_eof(true),
         keep_proto_id(false),

@@ -247,6 +247,9 @@ const static FlatCOption flatc_options[] = {
     "ts_entry_points." },
   { "", "ts-entry-points", "",
     "Generate entry point typescript per namespace. Implies gen-all." },
+  { "", "ts-generate-all-files", "",
+    "Generate typescript files for all .fbs files including included ones. "
+    "Default behavior generates only the main .fbs file." },
   { "", "annotate-sparse-vectors", "", "Don't annotate every vector element." },
   { "", "annotate", "SCHEMA",
     "Annotate the provided BINARY_FILE with the specified SCHEMA file." },
@@ -675,6 +678,8 @@ FlatCOptions FlatCompiler::ParseFromCommandLineArguments(int argc,
         opts.generate_all = true;
       } else if (arg == "--ts-no-import-ext") {
         opts.ts_no_import_ext = true;
+      } else if (arg == "--ts-generate-all-files") {
+        opts.ts_generate_all_files = true;
       } else if (arg == "--no-leak-private-annotation") {
         opts.no_leak_private_annotations = true;
       } else if (arg == "--python-no-type-prefix-suffix") {
