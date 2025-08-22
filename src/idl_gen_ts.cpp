@@ -564,7 +564,7 @@ class TsGenerator : public BaseGenerator {
     // Generate relative import path based on file structure
     std::string current_dir = flatbuffers::StripFileName(current_file);
     std::string target_base = flatbuffers::StripExtension(target_file);
-    std::string target_filename = flatbuffers::StripPath(target_base) + "_generated.js";
+    std::string target_filename = flatbuffers::StripPath(target_base) + "_generated";
     std::string target_dir = flatbuffers::StripFileName(target_base);
 
     return target_dir + "/" + target_filename;
