@@ -20,8 +20,10 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
+#include <filesystem>
 
 #include "flatbuffers/code_generators.h"
 #include "flatbuffers/flatbuffers.h"
@@ -62,7 +64,7 @@ Namer::Config TypeScriptDefaultConfig() {
            /*enum_variant_seperator=*/"::",
            /*escape_keywords=*/Namer::Config::Escape::AfterConvertingCase,
            /*namespaces=*/Case::kKeep,
-           /*namespace_seperator=*/"_",
+           /*namespace_seperator=*/".",
            /*object_prefix=*/"",
            /*object_suffix=*/"T",
            /*keyword_prefix=*/"",
@@ -111,10 +113,7 @@ class TsGenerator : public BaseGenerator {
                TypescriptKeywords()) {}
 
   bool generate() {
-    generateEnums();
-    generateStructs();
-    if (!parser_.opts.ts_omit_entrypoint) { generateEntry(); }
-    if (!generateBundle()) return false;
+    generatePerFileStructure();
     return true;
   }
 
@@ -164,7 +163,19 @@ class TsGenerator : public BaseGenerator {
     }
     if (!imports.empty()) code += "\n\n";
 
-    code += class_code;
+    // Wrap in namespace declarations if the definition belongs to a namespace
+    std::string namespace_wrapper_start = "";
+    std::string namespace_wrapper_end = "";
+    if (definition.defined_namespace && !definition.defined_namespace->components.empty()) {
+      for (const auto &component : definition.defined_namespace->components) {
+        namespace_wrapper_start += "export namespace " + namer_.EscapeKeyword(component) + " {\n";
+        namespace_wrapper_end = "}\n" + namespace_wrapper_end;
+      }
+      namespace_wrapper_start += "\n";
+      namespace_wrapper_end = "\n" + namespace_wrapper_end;
+    }
+
+    code += namespace_wrapper_start + class_code + namespace_wrapper_end;
 
     auto dirs = namer_.Directories(*definition.defined_namespace);
     EnsureDirExists(dirs);
@@ -177,6 +188,7 @@ class TsGenerator : public BaseGenerator {
     std::string path;
     std::string filepath;
     std::string symbolic_name;
+
     if (definition.defined_namespace->components.size() > 0) {
       path = namer_.Directories(*definition.defined_namespace,
                                 SkipDir::TrailingPathSeperator);
@@ -205,7 +217,11 @@ class TsGenerator : public BaseGenerator {
  private:
   IdlNamer namer_;
 
-  std::map<std::string, NsDefinition> ns_defs_;
+    std::map<std::string, NsDefinition> ns_defs_;
+
+  // Group definitions by source file
+  std::map<std::string, std::vector<const EnumDef*>> enums_by_file_;
+  std::map<std::string, std::vector<const StructDef*>> structs_by_file_;
 
   // Generate code for all enums.
   void generateEnums() {
@@ -254,10 +270,12 @@ class TsGenerator : public BaseGenerator {
       ns_defs_[nsDef.path] = nsDef;
     }
 
+
+
     for (const auto &it : ns_defs_) {
       code = "// " + std::string(FlatBuffersGeneratedWarning()) + "\n\n" +
         "/* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */\n\n";
-      
+
       // export all definitions in ns entry point module
       int export_counter = 0;
       for (const auto &def : it.second.definitions) {
@@ -286,11 +304,25 @@ class TsGenerator : public BaseGenerator {
         auto fully_qualified_type_name =
             it.second.ns->GetFullyQualifiedName(type_name);
         auto is_struct = parser_.structs_.Lookup(fully_qualified_type_name);
-        code += "export { " + type_name;
-        if (parser_.opts.generate_object_based_api && is_struct) {
-          code += ", " + type_name + parser_.opts.object_suffix;
+
+        // Build namespace path for export
+        std::string ns_path = "";
+        if (def.second->defined_namespace && !def.second->defined_namespace->components.empty()) {
+          for (const auto &component : def.second->defined_namespace->components) {
+            if (!ns_path.empty()) ns_path += ".";
+            ns_path += namer_.EscapeKeyword(component);
+          }
+          // Export the entire namespace from the file
+          code += "export { " + ns_path + " } from '";
+        } else {
+          // For non-namespaced types, use the original logic
+          code += "export { " + type_name;
+          if (parser_.opts.generate_object_based_api && is_struct) {
+            code += ", " + type_name + parser_.opts.object_suffix;
+          }
+          code += " } from '";
         }
-        code += " } from '";
+
         std::string import_extension =
             parser_.opts.ts_no_import_ext ? "" : ".js";
         code += base_name_rel + import_extension + "';\n";
@@ -299,6 +331,7 @@ class TsGenerator : public BaseGenerator {
 
       // re-export child namespace(s) in parent
       const auto child_ns_level = it.second.ns->components.size() + 1;
+      int child_namespace_exports = 0;
       for (const auto &it2 : ns_defs_) {
         if (it2.second.ns->components.size() != child_ns_level) continue;
         auto ts_file_path = it2.second.path + ".ts";
@@ -306,9 +339,36 @@ class TsGenerator : public BaseGenerator {
         std::string rel_path = it2.second.path;
         code += rel_path + ".js';\n";
         export_counter++;
+        child_namespace_exports++;
       }
 
-      if (export_counter > 0) SaveFile(it.second.filepath.c_str(), code, false);
+      // For root namespace (empty path), only export top-level namespaces if no child namespace exports were added
+      if (it.first.empty() && child_namespace_exports == 0) {
+        // Collect unique top-level namespace names
+        std::set<std::string> top_level_namespaces;
+        for (const auto &it2 : ns_defs_) {
+          if (!it2.second.ns->components.empty()) {
+            top_level_namespaces.insert(it2.second.ns->components[0]);
+          }
+        }
+
+        // Export each top-level namespace by finding the actual namespace path
+        for (const std::string &top_ns : top_level_namespaces) {
+          // Find the actual path for this top-level namespace
+          for (const auto &it2 : ns_defs_) {
+            if (!it2.second.ns->components.empty() && it2.second.ns->components[0] == top_ns) {
+              std::string import_extension = parser_.opts.ts_no_import_ext ? "" : ".js";
+              code += "export * as " + top_ns + " from './" + it2.second.path + import_extension + "';\n";
+              export_counter++;
+              break; // Only need the first match for each top-level namespace
+            }
+          }
+        }
+      }
+
+      if (export_counter > 0) {
+        SaveFile(it.second.filepath.c_str(), code, false);
+      }
     }
   }
 
@@ -333,6 +393,214 @@ class TsGenerator : public BaseGenerator {
       std::cout << "> " << cmd << std::endl;
     }
     return true;
+  }
+
+  // Generate one TypeScript file per source .fbs file
+  void generatePerFileStructure() {
+    // Group all definitions by their source file
+    groupDefinitionsByFile();
+
+    // Collect all unique source files
+    std::set<std::string> all_files;
+    for (const auto& file_pair : enums_by_file_) {
+      all_files.insert(file_pair.first);
+    }
+    for (const auto& file_pair : structs_by_file_) {
+      all_files.insert(file_pair.first);
+    }
+
+    // If ts_generate_all_files flag is set, generate all files (current behavior)
+    // Otherwise, only generate the main file being processed (new default behavior)
+    if (parser_.opts.ts_generate_all_files) {
+      // Generate one .ts file per source .fbs file
+      for (const std::string& source_file : all_files) {
+        generateFileContent(source_file);
+      }
+    } else {
+      // Only generate the main file - the one passed to flatc
+      // The main file name is stored in file_name_ (without extension)
+      std::string main_file_with_extension = file_name_ + ".fbs";
+
+      // Find the main file in the set of all files (it might have a path)
+      std::string main_file_to_generate;
+      for (const std::string& source_file : all_files) {
+        std::string basename = flatbuffers::StripPath(source_file);
+        if (basename == main_file_with_extension || source_file == main_file_with_extension) {
+          main_file_to_generate = source_file;
+          break;
+        }
+      }
+
+      // Generate only the main file if found
+      if (!main_file_to_generate.empty()) {
+        generateFileContent(main_file_to_generate);
+      }
+    }
+  }
+
+  void groupDefinitionsByFile() {
+    // Group enums by file
+    for (auto it = parser_.enums_.vec.begin(); it != parser_.enums_.vec.end(); ++it) {
+      auto &enum_def = **it;
+      enums_by_file_[enum_def.file].push_back(&enum_def);
+    }
+
+    // Group structs by file
+    for (auto it = parser_.structs_.vec.begin(); it != parser_.structs_.vec.end(); ++it) {
+      auto &struct_def = **it;
+      structs_by_file_[struct_def.file].push_back(&struct_def);
+    }
+  }
+
+  void generateFileContent(const std::string& source_file) {
+    std::string accumulated_content;
+
+    // Add file header
+    accumulated_content += "// " + std::string(FlatBuffersGeneratedWarning()) + "\n\n";
+    accumulated_content += "/* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */\n\n";
+
+    // Add flatbuffers import
+    accumulated_content += "import * as flatbuffers from 'flatbuffers';\n";
+
+    // Add imports for definitions from other files
+    generateImportsForFile(source_file, accumulated_content);
+
+    // Process enums in the file
+    auto enum_it = enums_by_file_.find(source_file);
+    if (enum_it != enums_by_file_.end()) {
+      for (const EnumDef* enum_def : enum_it->second) {
+        // Generate enum
+        std::string enumcode;
+        import_set imports;  // Use proper import set for cross-file references
+        GenEnum(const_cast<EnumDef&>(*enum_def), &enumcode, imports, false);
+        GenEnum(const_cast<EnumDef&>(*enum_def), &enumcode, imports, true);
+
+        // Wrap in namespace
+        accumulateContentWithNamespace(*enum_def, enumcode, accumulated_content);
+      }
+    }
+
+    // Process structs in the file
+    auto struct_it = structs_by_file_.find(source_file);
+    if (struct_it != structs_by_file_.end()) {
+      for (const StructDef* struct_def : struct_it->second) {
+        // Generate struct/table
+        std::string declcode;
+        import_set imports;  // Use proper import set for cross-file references
+        GenStruct(parser_, const_cast<StructDef&>(*struct_def), &declcode, imports);
+
+        // Wrap in namespace
+        accumulateContentWithNamespace(*struct_def, declcode, accumulated_content);
+      }
+    }
+
+    // Generate output filename based on source file
+    std::string output_filename = generateOutputFilename(source_file);
+    SaveFile(output_filename.c_str(), accumulated_content, false);
+  }
+
+  void accumulateContentWithNamespace(const Definition &definition, const std::string &class_code, std::string &accumulated_content) {
+    if (class_code.empty()) return;
+
+    // Wrap in namespace declarations if the definition belongs to a namespace
+    std::string namespace_wrapper_start = "";
+    std::string namespace_wrapper_end = "";
+    if (definition.defined_namespace && !definition.defined_namespace->components.empty()) {
+      for (const auto &component : definition.defined_namespace->components) {
+        namespace_wrapper_start += "export namespace " + namer_.EscapeKeyword(component) + " {\n";
+        namespace_wrapper_end = "}\n" + namespace_wrapper_end;
+      }
+      namespace_wrapper_start += "\n";
+      namespace_wrapper_end = "\n" + namespace_wrapper_end;
+    }
+
+    accumulated_content += namespace_wrapper_start + class_code + namespace_wrapper_end + "\n";
+  }
+
+  void generateImportsForFile(const std::string& source_file, std::string &accumulated_content) {
+    std::set<std::string> imported_files;
+
+    // Collect dependencies from structs in this file
+    auto struct_it = structs_by_file_.find(source_file);
+    if (struct_it != structs_by_file_.end()) {
+      for (const StructDef* struct_def : struct_it->second) {
+        // Check field dependencies
+        for (const auto& field : struct_def->fields.vec) {
+          collectFileDependencies(field->value.type, source_file, imported_files);
+        }
+      }
+    }
+
+    // Generate import statements
+    for (const std::string& imported_file : imported_files) {
+      if (imported_file != source_file) {
+        std::string import_filename = generateImportPath(source_file, imported_file);
+        accumulated_content += "import * as " + generateImportAlias(imported_file) +
+                               " from '" + import_filename + "';\n";
+      }
+    }
+
+    if (!imported_files.empty()) {
+      accumulated_content += "\n";
+    }
+  }
+
+  void collectFileDependencies(const Type& type, const std::string& current_file, std::set<std::string>& imported_files) {
+    if (type.struct_def && type.struct_def->file != current_file) {
+      imported_files.insert(type.struct_def->file);
+    }
+    if (type.enum_def && type.enum_def->file != current_file) {
+      imported_files.insert(type.enum_def->file);
+    }
+
+    // Handle vector/array element types
+    if (type.base_type == BASE_TYPE_VECTOR || type.base_type == BASE_TYPE_ARRAY) {
+      Type element_type = type.VectorType();
+      collectFileDependencies(element_type, current_file, imported_files);
+    }
+  }
+
+  std::string generateImportPath(const std::string& current_file, const std::string& target_file) {
+    // Generate relative import path based on file structure
+    std::string current_dir = flatbuffers::StripFileName(current_file);
+    std::string target_base = flatbuffers::StripExtension(target_file);
+    std::string target_filename = flatbuffers::StripPath(target_base) + "_generated";
+    std::string target_dir = flatbuffers::StripFileName(target_base);
+
+    return target_dir + "/" + target_filename;
+  }
+
+  std::string generateImportAlias(const std::string& file) {
+    // Generate a valid TypeScript identifier from the file name
+    std::string base_name = flatbuffers::StripExtension(flatbuffers::StripPath(file));
+
+    // Convert to camelCase and ensure it's a valid identifier
+    std::string alias = "";
+    bool next_upper = false;
+    for (char c : base_name) {
+      if (c == '_' || c == '-' || c == '.') {
+        next_upper = true;
+      } else if (next_upper) {
+        alias += std::toupper(c);
+        next_upper = false;
+      } else {
+        alias += c;
+      }
+    }
+
+    return alias.empty() ? "imported" : alias;
+  }
+
+  std::string generateOutputFilename(const std::string& source_file) {
+    // Preserve directory structure from source file
+    std::string base_name = flatbuffers::StripExtension(flatbuffers::StripPath(source_file));
+    std::string filename = base_name + "_generated.ts";
+    std::string full_path = path_ + filename;
+    // Ensure the directory exists
+    std::string dir = flatbuffers::StripFileName(full_path);
+    EnsureDirExists(dir);
+
+    return full_path;
   }
 
   // Generate a documentation comment, if available.
@@ -448,7 +716,7 @@ class TsGenerator : public BaseGenerator {
 
   std::string GenBBAccess() const { return "this.bb!"; }
 
-  std::string GenDefaultValue(const FieldDef &field, import_set &imports) {
+  std::string GenDefaultValue(const FieldDef &field, import_set &imports, const Definition *dependent = nullptr) {
     if (field.IsScalarOptional()) { return "null"; }
 
     const auto &value = field.value;
@@ -458,11 +726,16 @@ class TsGenerator : public BaseGenerator {
         case BASE_TYPE_ARRAY: {
           std::string ret = "[";
           for (auto i = 0; i < value.type.fixed_length; ++i) {
-            std::string enum_name =
-                AddImport(imports, *value.type.enum_def, *value.type.enum_def)
-                    .name;
-            std::string enum_value = namer_.Variant(
-                *value.type.enum_def->FindByValue(value.constant));
+            std::string enum_name;
+            if (dependent) {
+              enum_name = AddImport(imports, *dependent, *value.type.enum_def).name;
+            } else {
+              enum_name = GetTypeName(*value.type.enum_def, /*object_api=*/false, /*force_ns_wrap=*/true);
+            }
+            EnumVal *val = value.type.enum_def->FindByValue(value.constant);
+            if (val == nullptr)
+              val = const_cast<EnumVal *>(value.type.enum_def->MinValue());
+            std::string enum_value = namer_.Variant(*val);
             ret += enum_name + "." + enum_value +
                    (i < value.type.fixed_length - 1 ? ", " : "");
           }
@@ -480,9 +753,14 @@ class TsGenerator : public BaseGenerator {
           EnumVal *val = value.type.enum_def->FindByValue(value.constant);
           if (val == nullptr)
             val = const_cast<EnumVal *>(value.type.enum_def->MinValue());
-          return AddImport(imports, *value.type.enum_def, *value.type.enum_def)
-                     .name +
-                 "." + namer_.Variant(*val);
+
+          std::string enum_name;
+          if (dependent) {
+            enum_name = AddImport(imports, *dependent, *value.type.enum_def).name;
+          } else {
+            enum_name = GetTypeName(*value.type.enum_def, /*object_api=*/false, /*force_ns_wrap=*/true);
+          }
+          return enum_name + "." + namer_.Variant(*val);
         }
       }
     }
@@ -567,7 +845,7 @@ class TsGenerator : public BaseGenerator {
 
   static Type GetUnionUnderlyingType(const Type &type)
   {
-    if (type.enum_def != nullptr && 
+    if (type.enum_def != nullptr &&
         type.enum_def->underlying_type.base_type != type.base_type) {
       return type.enum_def->underlying_type;
     } else {
@@ -803,7 +1081,13 @@ class TsGenerator : public BaseGenerator {
       if (IsString(ev.union_type)) {
         type = "string";  // no need to wrap string type in namespace
       } else if (ev.union_type.base_type == BASE_TYPE_STRUCT) {
-        type = AddImport(imports, union_enum, *ev.union_type.struct_def).name;
+        // Add safety check for null struct_def pointer
+        if (ev.union_type.struct_def) {
+          type = AddImport(imports, union_enum, *ev.union_type.struct_def).name;
+        } else {
+          // Fallback for invalid struct_def pointer
+          type = "any"; // Use 'any' type as fallback
+        }
       } else {
         FLATBUFFERS_ASSERT(false);
       }
@@ -833,21 +1117,33 @@ class TsGenerator : public BaseGenerator {
                                   const std::string &object_name) {
     std::string symbols_expression;
 
+    // Build fully qualified type name for import if struct is in a namespace
+    std::string fully_qualified_type = import_name;
+    std::string fully_qualified_object = GetTypeName(struct_def, /*object_api =*/true);
+
+    if (struct_def.defined_namespace && !struct_def.defined_namespace->components.empty()) {
+      std::string ns_prefix = "";
+      for (const auto &component : struct_def.defined_namespace->components) {
+        if (!ns_prefix.empty()) ns_prefix += ".";
+        ns_prefix += namer_.EscapeKeyword(component);
+      }
+      fully_qualified_type = ns_prefix + "." + import_name;
+      fully_qualified_object = ns_prefix + "." + fully_qualified_object;
+    }
+
     if (has_name_clash) {
       // We have a name clash
-      symbols_expression += import_name + " as " + name;
+      symbols_expression += fully_qualified_type + " as " + name;
 
       if (parser_.opts.generate_object_based_api) {
-        symbols_expression += ", " +
-                              GetTypeName(struct_def, /*object_api =*/true) +
-                              " as " + object_name;
+        symbols_expression += ", " + fully_qualified_object + " as " + object_name;
       }
     } else {
-      // No name clash, use the provided name
-      symbols_expression += name;
+      // No name clash, use the fully qualified type name
+      symbols_expression += fully_qualified_type;
 
       if (parser_.opts.generate_object_based_api) {
-        symbols_expression += ", " + object_name;
+        symbols_expression += ", " + fully_qualified_object;
       }
     }
 
@@ -860,15 +1156,41 @@ class TsGenerator : public BaseGenerator {
                                   const std::string &name,
                                   const std::string &) {
     std::string symbols_expression;
+
+    // Build fully qualified type name for import if enum is in a namespace
+    std::string fully_qualified_type = import_name;
+    if (enum_def.defined_namespace && !enum_def.defined_namespace->components.empty()) {
+      std::string ns_prefix = "";
+      for (const auto &component : enum_def.defined_namespace->components) {
+        if (!ns_prefix.empty()) ns_prefix += ".";
+        ns_prefix += namer_.EscapeKeyword(component);
+      }
+      fully_qualified_type = ns_prefix + "." + import_name;
+    }
+
     if (has_name_clash) {
-      symbols_expression += import_name + " as " + name;
+      symbols_expression += fully_qualified_type + " as " + name;
     } else {
-      symbols_expression += name;
+      symbols_expression += fully_qualified_type;
     }
 
     if (enum_def.is_union) {
-      symbols_expression += (", " + namer_.Function("unionTo" + name));
-      symbols_expression += (", " + namer_.Function("unionListTo" + name));
+      std::string union_functions = namer_.Function("unionTo" + import_name);
+      std::string union_list_functions = namer_.Function("unionListTo" + import_name);
+
+      // Add namespace qualification for union helper functions
+      if (enum_def.defined_namespace && !enum_def.defined_namespace->components.empty()) {
+        std::string ns_prefix = "";
+        for (const auto &component : enum_def.defined_namespace->components) {
+          if (!ns_prefix.empty()) ns_prefix += ".";
+          ns_prefix += namer_.EscapeKeyword(component);
+        }
+        union_functions = ns_prefix + "." + union_functions;
+        union_list_functions = ns_prefix + "." + union_list_functions;
+      }
+
+      symbols_expression += (", " + union_functions);
+      symbols_expression += (", " + union_list_functions);
     }
 
     return symbols_expression;
@@ -877,61 +1199,26 @@ class TsGenerator : public BaseGenerator {
   template<typename DefinitionT>
   ImportDefinition AddImport(import_set &imports, const Definition &dependent,
                              const DefinitionT &dependency) {
-    // The unique name of the dependency, fully qualified in its namespace.
-    const std::string unique_name = GetTypeName(
-        dependency, /*object_api = */ false, /*force_ns_wrap=*/true);
+    // In per-file generation mode, use import aliases for cross-file references
+    ImportDefinition import;
+    if (dependent.file != dependency.file) {
+      // Cross-file reference: use import alias + qualified name
+      std::string import_alias = generateImportAlias(dependency.file);
+      std::string qualified_name = GetTypeName(dependency, /*object_api=*/false, /*force_ns_wrap=*/true);
+      std::string qualified_object_name = GetTypeName(dependency, /*object_api=*/true, /*force_ns_wrap=*/true);
 
-    // Look if we have already added this import and return its name if found.
-    const auto import_pair = imports.find(unique_name);
-    if (import_pair != imports.end()) { return import_pair->second; }
-
-    // Check if this name would have a name clash with another type. Just use
-    // the "base" name (properly escaped) without any namespacing applied.
-    const std::string import_name = GetTypeName(dependency);
-    const bool has_name_clash = CheckIfNameClashes(imports, import_name);
-
-    // If we have a name clash, use the unique name, otherwise use simple name.
-    std::string name = has_name_clash ? unique_name : import_name;
-
-    const std::string object_name =
-        GetTypeName(dependency, /*object_api=*/true, has_name_clash);
-
-    const std::string symbols_expression = GenSymbolExpression(
-        dependency, has_name_clash, import_name, name, object_name);
-
-    std::string bare_file_path;
-    std::string rel_file_path;
-    if (dependent.defined_namespace) {
-      const auto &dep_comps = dependent.defined_namespace->components;
-      for (size_t i = 0; i < dep_comps.size(); i++) {
-        rel_file_path += i == 0 ? ".." : (kPathSeparator + std::string(".."));
-      }
-      if (dep_comps.size() == 0) { rel_file_path += "."; }
+      import.name = import_alias + "." + qualified_name;
+      import.object_name = import_alias + "." + qualified_object_name;
     } else {
-      rel_file_path += "..";
+      // Same file reference: use qualified names directly
+      import.name = GetTypeName(dependency, /*object_api=*/false, /*force_ns_wrap=*/true);
+      import.object_name = GetTypeName(dependency, /*object_api=*/true, /*force_ns_wrap=*/true);
     }
 
-    bare_file_path +=
-        kPathSeparator +
-        namer_.Directories(dependency.defined_namespace->components,
-                           SkipDir::OutputPath) +
-        namer_.File(dependency, SkipFile::SuffixAndExtension);
-    rel_file_path += bare_file_path;
-
-    ImportDefinition import;
-    import.name = name;
-    import.object_name = object_name;
-    import.bare_file_path = bare_file_path;
-    import.rel_file_path = rel_file_path;
-    std::string import_extension = parser_.opts.ts_no_import_ext ? "" : ".js";
-    import.import_statement = "import { " + symbols_expression + " } from '" +
-                              rel_file_path + import_extension + "';";
-    import.export_statement = "export { " + symbols_expression + " } from '." +
-                              bare_file_path + import_extension + "';";
+    import.import_statement = "";  // Not used in per-file mode
+    import.export_statement = "";  // Not used in per-file mode
     import.dependency = &dependency;
     import.dependent = &dependent;
-
-    imports.insert(std::make_pair(unique_name, import));
 
     return import;
   }
@@ -962,8 +1249,14 @@ class TsGenerator : public BaseGenerator {
       if (IsString(ev.union_type)) {
         type = "string";  // no need to wrap string type in namespace
       } else if (ev.union_type.base_type == BASE_TYPE_STRUCT) {
-        type = AddImport(imports, dependent, *ev.union_type.struct_def)
-                   .object_name;
+        // Get the fully qualified object type name via AddImport
+        // Add safety check for null struct_def pointer
+        if (ev.union_type.struct_def) {
+          type = AddImport(imports, dependent, *ev.union_type.struct_def).object_name;
+        } else {
+          // Fallback for invalid struct_def pointer
+          type = "any"; // Use 'any' type as fallback
+        }
       } else {
         FLATBUFFERS_ASSERT(false);
       }
@@ -1016,8 +1309,11 @@ class TsGenerator : public BaseGenerator {
           if (IsString(ev.union_type)) {
             ret += "return " + accessor_str + "'') as string;";
           } else if (ev.union_type.base_type == BASE_TYPE_STRUCT) {
-            const auto type =
-                AddImport(imports, enum_def, *ev.union_type.struct_def).name;
+            // Add safety check for null struct_def pointer
+            std::string type = "any"; // Default fallback
+            if (ev.union_type.struct_def) {
+              type = AddImport(imports, enum_def, *ev.union_type.struct_def).name;
+            }
             ret += "return " + accessor_str + "new " + type + "())! as " +
                    type + ";";
           } else {
@@ -1065,7 +1361,30 @@ class TsGenerator : public BaseGenerator {
       std::string ret;
 
       if (!is_array) {
-        const auto conversion_function = GenUnionConvFuncName(enum_def);
+        std::string conversion_function = GenUnionConvFuncName(enum_def);
+
+        // Check if we need to namespace-qualify the conversion function for cross-file references
+        if (enum_def.file != dependent.file) {
+          std::string import_alias = generateImportAlias(enum_def.file);
+          std::string qualified_name = "";
+          for (const auto &component : enum_def.defined_namespace->components) {
+            if (!qualified_name.empty()) qualified_name += ".";
+            qualified_name += namer_.EscapeKeyword(component);
+          }
+          conversion_function = import_alias + "." + qualified_name + "." + conversion_function;
+        } else if (enum_def.defined_namespace && !enum_def.defined_namespace->components.empty() &&
+                   dependent.defined_namespace &&
+                   dependent.defined_namespace->GetFullyQualifiedName("") !=
+                   enum_def.defined_namespace->GetFullyQualifiedName("")) {
+
+          // Build fully qualified function name
+          std::string ns_prefix = "";
+          for (const auto &component : enum_def.defined_namespace->components) {
+            if (!ns_prefix.empty()) ns_prefix += ".";
+            ns_prefix += namer_.EscapeKeyword(component);
+          }
+          conversion_function = ns_prefix + "." + conversion_function;
+        }
 
         ret = "(() => {\n";
         ret += "      const temp = " + conversion_function + "(this." +
@@ -1078,11 +1397,35 @@ class TsGenerator : public BaseGenerator {
         ret += "      return temp.unpack()\n";
         ret += "  })()";
       } else {
-        const auto conversion_function = GenUnionListConvFuncName(enum_def);
+        std::string conversion_function = GenUnionListConvFuncName(enum_def);
+
+        // Check if we need to namespace-qualify the conversion function for cross-file references
+        if (enum_def.file != dependent.file) {
+          std::string import_alias = generateImportAlias(enum_def.file);
+          std::string qualified_name = "";
+          for (const auto &component : enum_def.defined_namespace->components) {
+            if (!qualified_name.empty()) qualified_name += ".";
+            qualified_name += namer_.EscapeKeyword(component);
+          }
+          conversion_function = import_alias + "." + qualified_name + "." + conversion_function;
+        } else if (enum_def.defined_namespace && !enum_def.defined_namespace->components.empty() &&
+                   dependent.defined_namespace &&
+                   dependent.defined_namespace->GetFullyQualifiedName("") !=
+                   enum_def.defined_namespace->GetFullyQualifiedName("")) {
+
+          // Build fully qualified function name
+          std::string ns_prefix = "";
+          for (const auto &component : enum_def.defined_namespace->components) {
+            if (!ns_prefix.empty()) ns_prefix += ".";
+            ns_prefix += namer_.EscapeKeyword(component);
+          }
+          conversion_function = ns_prefix + "." + conversion_function;
+        }
 
         ret = "(() => {\n";
         ret += "    const ret: (" +
-               GenObjApiUnionTypeTS(imports, *union_type.struct_def,
+               GenObjApiUnionTypeTS(imports,
+                                    union_type.struct_def ? *union_type.struct_def : dependent,
                                     parser_.opts, *union_type.enum_def) +
                ")[] = [];\n";
         ret += "    for(let targetEnumIndex = 0; targetEnumIndex < this." +
@@ -1219,7 +1562,7 @@ class TsGenerator : public BaseGenerator {
       // a string that contains values for things that can be created inline or
       // the variable name from field_offset_decl
       std::string field_offset_val;
-      const auto field_default_val = GenDefaultValue(field, imports);
+      const auto field_default_val = GenDefaultValue(field, imports, &struct_def);
 
       // Emit a scalar field
       const auto is_string = IsString(field.value.type);
@@ -1658,7 +2001,7 @@ class TsGenerator : public BaseGenerator {
           code +=
               offset_prefix + GenGetter(field.value.type, "(" + index + ")");
           if (field.value.type.base_type != BASE_TYPE_ARRAY) {
-            code += " : " + GenDefaultValue(field, imports);
+            code += " : " + GenDefaultValue(field, imports, &struct_def);
           }
           code += ";\n";
         }
@@ -1767,7 +2110,13 @@ class TsGenerator : public BaseGenerator {
               default: {
                 if (IsScalar(field.value.type.element)) {
                   if (field.value.type.enum_def) {
-                    code += field.value.constant;
+                    // Generate qualified enum reference instead of raw constant
+                    const auto *enum_def = field.value.type.enum_def;
+                    EnumVal *val = enum_def->FindByValue(field.value.constant);
+                    if (val == nullptr)
+                      val = const_cast<EnumVal *>(enum_def->MinValue());
+                    std::string enum_name = AddImport(imports, struct_def, *enum_def).name;
+                    code += " : " + enum_name + "." + namer_.Variant(*val);
                   } else {
                     code += " : 0";
                   }
@@ -1849,7 +2198,13 @@ class TsGenerator : public BaseGenerator {
               code += "BigInt(0)";
             } else if (IsScalar(field.value.type.element)) {
               if (field.value.type.enum_def) {
-                code += field.value.constant;
+                // Generate qualified enum reference instead of raw constant
+                const auto *enum_def = field.value.type.enum_def;
+                EnumVal *val = enum_def->FindByValue(field.value.constant);
+                if (val == nullptr)
+                  val = const_cast<EnumVal *>(enum_def->MinValue());
+                std::string enum_name = AddImport(imports, struct_def, *enum_def).name;
+                code += enum_name + "." + namer_.Variant(*val);
               } else {
                 code += "0";
               }
@@ -2007,7 +2362,7 @@ class TsGenerator : public BaseGenerator {
           code += "null";
         } else {
           if (field.value.type.base_type == BASE_TYPE_BOOL) { code += "+"; }
-          code += GenDefaultValue(field, imports);
+          code += GenDefaultValue(field, imports, &struct_def);
         }
         code += ");\n}\n\n";
 
