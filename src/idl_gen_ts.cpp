@@ -20,6 +20,7 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <map>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -531,6 +532,21 @@ class TsGenerator : public BaseGenerator {
       }
     }
 
+    // Collect dependencies from enums in this file (for union types)
+    auto enum_it = enums_by_file_.find(source_file);
+    if (enum_it != enums_by_file_.end()) {
+      for (const EnumDef* enum_def : enum_it->second) {
+        // Check union type dependencies
+        if (enum_def->is_union) {
+          for (const auto& ev : enum_def->Vals()) {
+            if (!ev->IsZero() && ev->union_type.base_type == BASE_TYPE_STRUCT && ev->union_type.struct_def) {
+              collectFileDependencies(ev->union_type, source_file, imported_files);
+            }
+          }
+        }
+      }
+    }
+
     // Generate import statements
     for (const std::string& imported_file : imported_files) {
       if (imported_file != source_file) {
@@ -557,6 +573,15 @@ class TsGenerator : public BaseGenerator {
     if (type.base_type == BASE_TYPE_VECTOR || type.base_type == BASE_TYPE_ARRAY) {
       Type element_type = type.VectorType();
       collectFileDependencies(element_type, current_file, imported_files);
+    }
+
+    // Handle union types
+    if (type.base_type == BASE_TYPE_UNION && type.enum_def) {
+      for (const auto& ev : type.enum_def->Vals()) {
+        if (!ev->IsZero() && ev->union_type.base_type == BASE_TYPE_STRUCT && ev->union_type.struct_def) {
+          collectFileDependencies(ev->union_type, current_file, imported_files);
+        }
+      }
     }
   }
 
@@ -1619,14 +1644,14 @@ class TsGenerator : public BaseGenerator {
               case BASE_TYPE_STRUCT: {
                 const auto &sd = *field.value.type.struct_def;
                 const auto field_type_name =
-                    GetTypeName(sd, /*object_api=*/true);
+                    AddImport(imports, struct_def, sd).object_name;
                 field_type += field_type_name;
                 field_type += ")[]";
 
                 field_val = GenBBAccess() + ".createObjList<" + vectortypename +
                             ", " + field_type_name + ">(" +
-                            field_binded_method + ", " +
-                            NumToString(field.value.type.fixed_length) + ")";
+                            field_binded_method + ", this." +
+                            namer_.Method(field, "Length") + "())";
 
                 if (sd.fixed) {
                   field_offset_decl =
@@ -1708,7 +1733,7 @@ class TsGenerator : public BaseGenerator {
               case BASE_TYPE_STRUCT: {
                 const auto &sd = *field.value.type.struct_def;
                 const auto field_type_name =
-                    GetTypeName(sd, /*object_api=*/true);
+                    AddImport(imports, struct_def, sd).object_name;
                 field_type += field_type_name;
                 field_type += ")[]";
 
