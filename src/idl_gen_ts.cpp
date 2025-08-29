@@ -1650,8 +1650,7 @@ class TsGenerator : public BaseGenerator {
 
                 field_val = GenBBAccess() + ".createObjList<" + vectortypename +
                             ", " + field_type_name + ">(" +
-                            field_binded_method + ", this." +
-                            namer_.Method(field, "Length") + "())";
+                            field_binded_method + ", " + NumToString(field.value.type.fixed_length) + ")";
 
                 if (sd.fixed) {
                   field_offset_decl =
