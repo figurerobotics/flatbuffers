@@ -1892,13 +1892,65 @@ class TsGenerator : public BaseGenerator {
       pack_func_create_call += "return " + struct_name + ".end" +
                                GetPrefixedName(struct_def) + "(builder);";
     }
+
+    // Generate unpack method for object API (clone/copy operation)
+    std::string obj_api_unpack_method = "\n\nunpack(): " + class_name + " {\n";
+    obj_api_unpack_method += "  return new " + class_name + "(\n";
+
+    for (auto it = struct_def.fields.vec.begin();
+        it != struct_def.fields.vec.end(); ++it) {
+      auto &field = **it;
+      if (field.deprecated) continue;
+
+      const auto field_field = namer_.Field(field);
+
+      // Handle different field types for cloning
+      if (IsScalar(field.value.type.base_type) || IsString(field.value.type)) {
+        obj_api_unpack_method += "    this." + field_field;
+      } else {
+        switch (field.value.type.base_type) {
+          case BASE_TYPE_STRUCT: {
+            obj_api_unpack_method += "    this." + field_field + " ? this." + field_field + ".unpack() : null";
+            break;
+          }
+          case BASE_TYPE_VECTOR:
+          case BASE_TYPE_ARRAY: {
+            auto vectortype = field.value.type.VectorType();
+            if (vectortype.base_type == BASE_TYPE_STRUCT) {
+              // For arrays of structs in T classes, just copy the array since items are already unpacked
+              obj_api_unpack_method += "    [...this." + field_field + "]";
+            } else {
+              // For primitive arrays, copy them
+              obj_api_unpack_method += "    [...this." + field_field + "]";
+            }
+            break;
+          }
+          case BASE_TYPE_UNION: {
+            obj_api_unpack_method += "    this." + field_field + " ? this." + field_field + ".unpack() : null";
+            break;
+          }
+          default:
+            obj_api_unpack_method += "    this." + field_field;
+            break;
+        }
+      }
+
+      if (std::next(it) != struct_def.fields.vec.end()) {
+        obj_api_unpack_method += ",\n";
+      } else {
+        obj_api_unpack_method += "\n";
+      }
+    }
+
+    obj_api_unpack_method += "  );\n}";
+
     obj_api_class = "\n";
     obj_api_class += "export class ";
     obj_api_class += GetTypeName(struct_def, /*object_api=*/true);
     obj_api_class += " implements flatbuffers.IGeneratedObject {\n";
     obj_api_class += constructor_func;
     obj_api_class += pack_func_prototype + pack_func_offset_decl +
-                     pack_func_create_call + "\n}";
+                     pack_func_create_call + "\n}"  + obj_api_unpack_method;
 
     obj_api_class += "\n}\n";
 
