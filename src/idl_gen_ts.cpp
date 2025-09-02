@@ -1037,12 +1037,16 @@ class TsGenerator : public BaseGenerator {
 
   void GenerateRootAccessor(StructDef &struct_def, std::string *code_ptr,
                             std::string &code, const std::string &object_name,
-                            bool size_prefixed) {
+                            bool size_prefixed, bool with_prefixed_name) {
     if (!struct_def.fixed) {
       GenDocComment(code_ptr);
       std::string sizePrefixed("SizePrefixed");
-      code += "static get" + (size_prefixed ? sizePrefixed : "") + "Root" +
-              GetPrefixedName(struct_def, "As");
+      if (with_prefixed_name) {
+        code += "static get" + (size_prefixed ? sizePrefixed : "") + "Root" +
+                GetPrefixedName(struct_def, "As");
+      } else {
+        code += "static get" + (size_prefixed ? sizePrefixed : "") + "RootAs";
+      }
       code += "(bb:flatbuffers.ByteBuffer, obj?:" + object_name +
               "):" + object_name + " {\n";
       if (size_prefixed) {
@@ -1954,8 +1958,10 @@ class TsGenerator : public BaseGenerator {
 
     // Generate special accessors for the table that when used as the root of a
     // FlatBuffer
-    GenerateRootAccessor(struct_def, code_ptr, code, object_name, false);
-    GenerateRootAccessor(struct_def, code_ptr, code, object_name, true);
+    GenerateRootAccessor(struct_def, code_ptr, code, object_name, false, false);
+    GenerateRootAccessor(struct_def, code_ptr, code, object_name, true, false);
+    GenerateRootAccessor(struct_def, code_ptr, code, object_name, false, true);
+    GenerateRootAccessor(struct_def, code_ptr, code, object_name, true, true);
 
     // Generate the identifier check method
     if (!struct_def.fixed && parser_.root_struct_def_ == &struct_def &&
