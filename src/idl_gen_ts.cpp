@@ -658,46 +658,52 @@ class TsGenerator : public BaseGenerator {
     if (enum_def.generated) return;
     if (reverse) return;  // FIXME.
     std::string &code = *code_ptr;
+    const bool is_64bit =
+        enum_def.underlying_type.base_type == BASE_TYPE_LONG ||
+        enum_def.underlying_type.base_type == BASE_TYPE_ULONG;
+    const bool is_bit_flags =
+        enum_def.attributes.Lookup("bit_flags") != nullptr;
+    const std::string type_name = GetTypeName(enum_def);
     GenDocComment(enum_def.doc_comment, code_ptr);
-    code += "export enum ";
-    code += GetTypeName(enum_def);
-    code += " {\n";
+    if (is_64bit) {
+      // Emit an explanation into the generated TypeScript so readers understand
+      // why this isn't a plain enum.
+      code +=
+          "// TypeScript enums do not support bigint member values, \n"
+          "// so this 64-bit enum is constructed as a const object\n";
+    }
+    code += is_64bit ? "export const " + type_name + " = {\n"
+                     : "export enum "  + type_name + " {\n";
+    // bit_flags enums get NONE (no flags) and ANY (all flags) sentinels.
+    if (is_bit_flags) {
+      code += is_64bit ? "  NONE: 0n,\n" : "  NONE = 0,\n";
+    }
     for (auto it = enum_def.Vals().begin(); it != enum_def.Vals().end(); ++it) {
       auto &ev = **it;
       if (!ev.doc_comment.empty()) {
         if (it != enum_def.Vals().begin()) { code += '\n'; }
         GenDocComment(ev.doc_comment, code_ptr, "  ");
       }
-
-      // Generate mapping between EnumName: EnumValue(int)
-      if (reverse) {
-        code += "  '" + enum_def.ToString(ev) + "'";
-        code += " = ";
-        code += "'" + namer_.Variant(ev) + "'";
-      } else {
-        code += "  " + namer_.Variant(ev);
-        code += " = ";
-        // Unfortunately, because typescript does not support bigint enums,
-        // for 64-bit enums, we instead map the enum names to strings.
-        switch (enum_def.underlying_type.base_type) {
-          case BASE_TYPE_LONG:
-          case BASE_TYPE_ULONG: {
-            code += "'" + enum_def.ToString(ev) + "'";
-            break;
-          }
-          default: code += enum_def.ToString(ev);
-        }
-      }
-
-      code += (it + 1) != enum_def.Vals().end() ? ",\n" : "\n";
+      code += is_64bit ? "  " + namer_.Variant(ev) + ": "  + enum_def.ToString(ev) + "n"
+                       : "  " + namer_.Variant(ev) + " = " + enum_def.ToString(ev);
+      // Always comma when bit_flags (ANY follows); otherwise only between members.
+      code += is_bit_flags ? ",\n" : ((it + 1) != enum_def.Vals().end() ? ",\n" : "\n");
     }
-    code += "}";
-
-    if (enum_def.is_union) {
-      code += GenUnionConvFunc(enum_def.underlying_type, imports);
+    if (is_bit_flags) {
+      uint64_t any_val = 0;
+      for (auto &ev : enum_def.Vals()) any_val |= ev->GetAsUInt64();
+      code += is_64bit ? "  ANY: " + NumToString(any_val) + "n\n"
+                       : "  ANY = " + NumToString(any_val) + "\n";
     }
-
-    code += "\n";
+    if (is_64bit) {
+      code += "} as const;\n";
+      code += "export type " + type_name + " = typeof " + type_name +
+              "[keyof typeof " + type_name + "];\n";
+    } else {
+      code += "}";
+      if (enum_def.is_union) { code += GenUnionConvFunc(enum_def.underlying_type, imports); }
+      code += "\n";
+    }
   }
 
   static std::string GenType(const Type &type) {
@@ -747,6 +753,15 @@ class TsGenerator : public BaseGenerator {
     const auto &value = field.value;
     if (value.type.enum_def && value.type.base_type != BASE_TYPE_UNION &&
         value.type.base_type != BASE_TYPE_VECTOR) {
+      // For bit_flags enums the default 0 maps to the synthesized NONE sentinel,
+      // regardless of underlying type width.
+      if (value.type.enum_def->attributes.Lookup("bit_flags") &&
+          value.constant == "0") {
+        const std::string enum_name =
+            dependent ? AddImport(imports, *dependent, *value.type.enum_def).name
+                      : GetTypeName(*value.type.enum_def, /*object_api=*/false, /*force_ns_wrap=*/true);
+        return enum_name + ".NONE";
+      }
       switch (value.type.base_type) {
         case BASE_TYPE_ARRAY: {
           std::string ret = "[";
@@ -769,9 +784,6 @@ class TsGenerator : public BaseGenerator {
         }
         case BASE_TYPE_LONG:
         case BASE_TYPE_ULONG: {
-          // If the value is an enum with a 64-bit base type, we have to just
-          // return the bigint value directly since typescript does not support
-          // enums with bigint backing types.
           return "BigInt('" + value.constant + "')";
         }
         default: {
