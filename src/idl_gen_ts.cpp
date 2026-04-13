@@ -466,6 +466,37 @@ class TsGenerator : public BaseGenerator {
     // Add imports for definitions from other files
     generateImportsForFile(source_file, accumulated_content);
 
+    // Track the currently-open namespace so consecutive definitions in the same
+    // namespace share one wrapper.
+    std::optional<std::vector<std::string>> cur_ns;
+
+    auto get_namespace = [](const Definition &d) -> std::vector<std::string> {
+      if (d.defined_namespace && !d.defined_namespace->components.empty())
+        return d.defined_namespace->components;
+      return {};
+    };
+    auto open_ns = [&](const std::vector<std::string> &components) {
+      for (const auto &c : components)
+        accumulated_content += "export namespace " + namer_.EscapeKeyword(c) + " {\n";
+      if (!components.empty()) accumulated_content += "\n";
+    };
+    auto close_ns = [&](const std::vector<std::string> &components) {
+      if (components.empty()) return;
+      accumulated_content += "\n";
+      for (auto it = components.rbegin(); it != components.rend(); ++it)
+        accumulated_content += "}\n";
+    };
+    auto emit = [&](const Definition &def, const std::string &code) {
+      if (code.empty()) return;
+      const auto ns = get_namespace(def);
+      if (!cur_ns.has_value() || *cur_ns != ns) {
+        if (cur_ns.has_value()) close_ns(*cur_ns);
+        open_ns(ns);
+        cur_ns = ns;
+      }
+      accumulated_content += code + "\n";
+    };
+
     // Process enums in the file
     auto enum_it = enums_by_file_.find(source_file);
     if (enum_it != enums_by_file_.end()) {
@@ -475,9 +506,7 @@ class TsGenerator : public BaseGenerator {
         import_set imports;  // Use proper import set for cross-file references
         GenEnum(const_cast<EnumDef&>(*enum_def), &enumcode, imports, false);
         GenEnum(const_cast<EnumDef&>(*enum_def), &enumcode, imports, true);
-
-        // Wrap in namespace
-        accumulateContentWithNamespace(*enum_def, enumcode, accumulated_content);
+        emit(*enum_def, enumcode);
       }
     }
 
@@ -487,13 +516,14 @@ class TsGenerator : public BaseGenerator {
       for (const StructDef* struct_def : struct_it->second) {
         // Generate struct/table
         std::string declcode;
-        import_set imports;  // Use proper import set for cross-file references
+        import_set imports;
         GenStruct(parser_, const_cast<StructDef&>(*struct_def), &declcode, imports);
-
-        // Wrap in namespace
-        accumulateContentWithNamespace(*struct_def, declcode, accumulated_content);
+        emit(*struct_def, declcode);
       }
     }
+
+    // Close the last open namespace block (if any)
+    if (cur_ns.has_value()) close_ns(*cur_ns);
 
     // Generate output filename based on source file
     std::string output_filename = generateOutputFilename(source_file);
@@ -658,46 +688,51 @@ class TsGenerator : public BaseGenerator {
     if (enum_def.generated) return;
     if (reverse) return;  // FIXME.
     std::string &code = *code_ptr;
+    const bool is_64bit =
+        enum_def.underlying_type.base_type == BASE_TYPE_LONG ||
+        enum_def.underlying_type.base_type == BASE_TYPE_ULONG;
+    const bool is_bit_flags =
+        enum_def.attributes.Lookup("bit_flags") != nullptr;
+    const std::string type_name = GetTypeName(enum_def);
     GenDocComment(enum_def.doc_comment, code_ptr);
-    code += "export enum ";
-    code += GetTypeName(enum_def);
-    code += " {\n";
+    if (is_64bit) {
+      // Emit an explanation into the generated TypeScript so readers understand
+      // why this isn't a plain enum.
+      code +=
+          "// TypeScript enums do not support bigint member values, \n"
+          "// so this 64-bit enum is constructed as a const object\n";
+    }
+    code += is_64bit ? "export const " + type_name + " = {\n"
+                     : "export enum "  + type_name + " {\n";
+    // bit_flags enums get NONE (no flags) and ANY (all flags) sentinels.
+    if (is_bit_flags) {
+      code += is_64bit ? "  NONE: 0n,\n" : "  NONE = 0,\n";
+    }
     for (auto it = enum_def.Vals().begin(); it != enum_def.Vals().end(); ++it) {
       auto &ev = **it;
       if (!ev.doc_comment.empty()) {
         if (it != enum_def.Vals().begin()) { code += '\n'; }
         GenDocComment(ev.doc_comment, code_ptr, "  ");
       }
-
-      // Generate mapping between EnumName: EnumValue(int)
-      if (reverse) {
-        code += "  '" + enum_def.ToString(ev) + "'";
-        code += " = ";
-        code += "'" + namer_.Variant(ev) + "'";
-      } else {
-        code += "  " + namer_.Variant(ev);
-        code += " = ";
-        // Unfortunately, because typescript does not support bigint enums,
-        // for 64-bit enums, we instead map the enum names to strings.
-        switch (enum_def.underlying_type.base_type) {
-          case BASE_TYPE_LONG:
-          case BASE_TYPE_ULONG: {
-            code += "'" + enum_def.ToString(ev) + "'";
-            break;
-          }
-          default: code += enum_def.ToString(ev);
-        }
-      }
-
-      code += (it + 1) != enum_def.Vals().end() ? ",\n" : "\n";
+      code += is_64bit ? "  " + namer_.Variant(ev) + ": "  + enum_def.ToString(ev) + "n"
+                       : "  " + namer_.Variant(ev) + " = " + enum_def.ToString(ev);
+      code += is_bit_flags ? ",\n" : ((it + 1) != enum_def.Vals().end() ? ",\n" : "\n");
     }
-    code += "}";
-
-    if (enum_def.is_union) {
-      code += GenUnionConvFunc(enum_def.underlying_type, imports);
+    if (is_bit_flags) {
+      uint64_t any_val = 0;
+      for (auto &ev : enum_def.Vals()) any_val |= ev->GetAsUInt64();
+      code += is_64bit ? "  ANY: " + NumToString(any_val) + "n\n"
+                       : "  ANY = " + NumToString(any_val) + "\n";
     }
-
-    code += "\n";
+    if (is_64bit) {
+      code += "} as const;\n";
+      code += "export type " + type_name + " = typeof " + type_name +
+              "[keyof typeof " + type_name + "];\n";
+    } else {
+      code += "}";
+      if (enum_def.is_union) { code += GenUnionConvFunc(enum_def.underlying_type, imports); }
+      code += "\n";
+    }
   }
 
   static std::string GenType(const Type &type) {
@@ -747,6 +782,15 @@ class TsGenerator : public BaseGenerator {
     const auto &value = field.value;
     if (value.type.enum_def && value.type.base_type != BASE_TYPE_UNION &&
         value.type.base_type != BASE_TYPE_VECTOR) {
+      // For bit_flags enums the default 0 maps to the synthesized NONE sentinel,
+      // regardless of underlying type.
+      if (value.type.enum_def->attributes.Lookup("bit_flags") &&
+          value.constant == "0") {
+        const std::string enum_name =
+            dependent ? AddImport(imports, *dependent, *value.type.enum_def).name
+                      : GetTypeName(*value.type.enum_def, /*object_api=*/false, /*force_ns_wrap=*/true);
+        return enum_name + ".NONE";
+      }
       switch (value.type.base_type) {
         case BASE_TYPE_ARRAY: {
           std::string ret = "[";
@@ -769,9 +813,6 @@ class TsGenerator : public BaseGenerator {
         }
         case BASE_TYPE_LONG:
         case BASE_TYPE_ULONG: {
-          // If the value is an enum with a 64-bit base type, we have to just
-          // return the bigint value directly since typescript does not support
-          // enums with bigint backing types.
           return "BigInt('" + value.constant + "')";
         }
         default: {
@@ -1228,6 +1269,7 @@ class TsGenerator : public BaseGenerator {
   template<typename DefinitionT>
   ImportDefinition AddImport(import_set &imports, const Definition &dependent,
                              const DefinitionT &dependency) {
+    (void)imports;  // Unused in per-file generation mode
     // In per-file generation mode, use import aliases for cross-file references
     ImportDefinition import;
     if (dependent.file != dependency.file) {
@@ -1533,7 +1575,8 @@ class TsGenerator : public BaseGenerator {
 
   void GenObjApi(const Parser &parser, StructDef &struct_def,
                  std::string &obj_api_unpack_func, std::string &obj_api_class,
-                 import_set &imports) {
+                 import_set &imports,
+                 const std::string &union_traits_code = "") {
     const auto class_name = GetTypeName(struct_def, /*object_api=*/true);
 
     std::string unpack_func = "\nunpack(): " + class_name +
@@ -1899,6 +1942,10 @@ class TsGenerator : public BaseGenerator {
     obj_api_class += constructor_func;
     obj_api_class += pack_func_prototype + pack_func_offset_decl +
                      pack_func_create_call + "\n}";
+
+    if (!union_traits_code.empty()) {
+      obj_api_class += "\n\n" + union_traits_code;
+    }
 
     obj_api_class += "\n}\n";
 
@@ -2530,15 +2577,53 @@ class TsGenerator : public BaseGenerator {
       code += "}\n";
     }
 
+    // For union fields emit a map from constructor reference to the
+    // corresponding enum value of the union member
+    std::string union_traits_code;
+    if (!struct_def.fixed) {
+      for (auto it = struct_def.fields.vec.begin();
+           it != struct_def.fields.vec.end(); ++it) {
+        auto &field = **it;
+        if (field.deprecated) continue;
+        if (field.value.type.base_type != BASE_TYPE_UNION) continue;
+
+        const auto &union_enum = *field.value.type.enum_def;
+        const std::string enum_type_name =
+            AddImport(imports, struct_def, union_enum).name;
+        const std::string field_method = namer_.Method(field);
+
+        union_traits_code += "static readonly " + field_method +
+                             "Traits: ReadonlyMap<any, " + enum_type_name +
+                             "> = new Map<any, " + enum_type_name + ">([\n";
+
+        for (auto &ev_ptr : union_enum.Vals()) {
+          const auto &ev = *ev_ptr;
+          if (ev.IsZero()) continue;  // Skip NONE sentinel
+          if (ev.union_type.base_type != BASE_TYPE_STRUCT) continue;
+          if (!ev.union_type.struct_def) continue;
+
+          const auto &ms = *ev.union_type.struct_def;
+          const auto imp = AddImport(imports, struct_def, ms);
+          const std::string enum_val =
+              enum_type_name + "." + namer_.Variant(ev);
+
+          union_traits_code += "  [" + imp.name        + ", " + enum_val + "],\n";
+          union_traits_code += "  [" + imp.object_name + ", " + enum_val + "],\n";
+        }
+
+        union_traits_code += "]);\n\n";
+      }
+    }
+
     if (parser_.opts.generate_object_based_api) {
       std::string obj_api_class;
       std::string obj_api_unpack_func;
       GenObjApi(parser_, struct_def, obj_api_unpack_func, obj_api_class,
-                imports);
+                imports, union_traits_code);
 
-      code += obj_api_unpack_func + "}\n" + obj_api_class;
+      code += obj_api_unpack_func + union_traits_code + "}\n" + obj_api_class;
     } else {
-      code += "}\n";
+      code += union_traits_code + "}\n";
     }
   }
 

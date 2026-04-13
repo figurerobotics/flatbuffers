@@ -1888,6 +1888,10 @@ class CppGenerator : public BaseGenerator {
       auto ev = type.enum_def->FindByValue(field.value.constant);
       if (ev) {
         return Name(*ev);
+      } else if (type.enum_def->attributes.Lookup("bit_flags") &&
+                 field.value.constant == "0") {
+        // bit_flags enums don't declare value 0, so ev will be null.
+        return "0";
       } else {
         return GenUnderlyingCast(field, true, field.value.constant);
       }
