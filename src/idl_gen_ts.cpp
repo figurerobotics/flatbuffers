@@ -467,13 +467,13 @@ class TsGenerator : public BaseGenerator {
     generateImportsForFile(source_file, accumulated_content);
 
     // Track the currently-open namespace so consecutive definitions in the same
-    // namespace share one wrapper
-    const std::vector<std::string> *cur_ns = nullptr;
+    // namespace share one wrapper.
+    std::optional<std::vector<std::string>> cur_ns;
 
-    auto get_ns = [](const Definition &d) -> const std::vector<std::string> & {
-      static const std::vector<std::string> empty;
-      return (d.defined_namespace && !d.defined_namespace->components.empty())
-                 ? d.defined_namespace->components : empty;
+    auto get_namespace = [](const Definition &d) -> std::vector<std::string> {
+      if (d.defined_namespace && !d.defined_namespace->components.empty())
+        return d.defined_namespace->components;
+      return {};
     };
     auto open_ns = [&](const std::vector<std::string> &components) {
       for (const auto &c : components)
@@ -488,11 +488,11 @@ class TsGenerator : public BaseGenerator {
     };
     auto emit = [&](const Definition &def, const std::string &code) {
       if (code.empty()) return;
-      const auto &ns = get_ns(def);
-      if (cur_ns == nullptr || *cur_ns != ns) {
-        if (cur_ns != nullptr) close_ns(*cur_ns);
+      const auto ns = get_namespace(def);
+      if (!cur_ns.has_value() || *cur_ns != ns) {
+        if (cur_ns.has_value()) close_ns(*cur_ns);
         open_ns(ns);
-        cur_ns = &ns;
+        cur_ns = ns;
       }
       accumulated_content += code + "\n";
     };
@@ -523,7 +523,7 @@ class TsGenerator : public BaseGenerator {
     }
 
     // Close the last open namespace block (if any)
-    if (cur_ns != nullptr) close_ns(*cur_ns);
+    if (cur_ns.has_value()) close_ns(*cur_ns);
 
     // Generate output filename based on source file
     std::string output_filename = generateOutputFilename(source_file);
