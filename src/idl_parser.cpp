@@ -4339,7 +4339,11 @@ bool Parser::Deserialize(const reflection::Schema *schema) {
     struct_def->defined_namespace =
         GetNamespace(qualified_name, namespaces_, namespaces_index);
     if (!struct_def->Deserialize(*this, *it)) { return false; }
-    if (schema->root_table() == *it) { root_struct_def_ = struct_def; }
+    if (schema->root_table() &&
+        schema->root_table()->name()->string_view() ==
+            (*it)->name()->string_view()) {
+      root_struct_def_ = struct_def;
+    }
   }
   for (auto it = schema->enums()->begin(); it != schema->enums()->end(); ++it) {
     std::string qualified_name = it->name()->str();
@@ -4368,6 +4372,7 @@ bool Parser::Deserialize(const reflection::Schema *schema) {
   if (schema->fbs_files())
     for (auto s = schema->fbs_files()->begin(); s != schema->fbs_files()->end();
          ++s) {
+      if (!s->included_filenames()) continue;
       for (auto f = s->included_filenames()->begin();
            f != s->included_filenames()->end(); ++f) {
         IncludedFile included_file;
