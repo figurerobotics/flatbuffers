@@ -2850,14 +2850,19 @@ class PythonGenerator : public BaseGenerator {
                                std::string *code_ptr) const {
     auto &code = *code_ptr;
     const auto union_type = namer_.Type(enum_def);
-    auto modified_ev = ev;
+    // Compute the variant name as a string instead of copying the EnumVal.
+    // Copying EnumVal shallow-copies its `attributes` SymbolTable<Value>,
+    // whose destructor would free Value* pointers still owned by the
+    // parser's original EnumVal -- a use-after-free at Parser teardown
+    // for any union member with non-empty attributes (e.g. deprecated).
+    std::string variant_name = namer_.Variant(ev);
     // If we are a single file mode then we need to create a object name in the
     // local scope without the namespace.
     // TODO(ENG-7570) Split on .s before they are converted to _, or add
     // explicit check against _ in the table name during early validation.
     if (const auto last_underscore = ev.name.find_last_of('_');
         parser_.opts.one_file && last_underscore != ev.name.npos) {
-      modified_ev.name = ev.name.substr(last_underscore + 1);
+      variant_name = namer_.Variant(ev.name.substr(last_underscore + 1));
     }
     auto field_type = namer_.ObjectType(*ev.union_type.struct_def);
 
@@ -2869,7 +2874,7 @@ class PythonGenerator : public BaseGenerator {
       field_type = package_reference + "." + field_type;
     }
 
-    code += GenIndents(2) + "obj = " + namer_.Variant(modified_ev) + "()";
+    code += GenIndents(2) + "obj = " + variant_name + "()";
     code += GenIndents(2) + "obj.init(table.Bytes, table.Pos)";
     code += GenIndents(2) + "return obj";
   }
