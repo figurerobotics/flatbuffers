@@ -757,8 +757,8 @@ class PythonGenerator : public BaseGenerator {
 
     GenReceiver(struct_def, code_ptr);
     code += namer_.Method(field);
-    code += "(self): \n";
-    code += Indent + " return " + getter;
+    code += "(self):\n";
+    code += Indent + Indent + "return " + getter;
   }
 
   // Get the value of a table's scalar.
@@ -1113,20 +1113,38 @@ class PythonGenerator : public BaseGenerator {
 
     const ImportMapEntry import_entry = { GenPackageReference(field.value.type),
                                           TypeName(field) };
+    const bool is_vector_of_struct =
+        field.value.type.base_type == BASE_TYPE_VECTOR &&
+        vectortype.base_type == BASE_TYPE_STRUCT;
 
     if (parser_.opts.python_typing) {
-      std::string return_type = "Any";
-      if (vectortype.base_type == BASE_TYPE_STRUCT) {
-        return_type = ReturnType(struct_def, field) + " | None";
+      code += "(self) -> Generator[" +
+              VectorElementPythonType(struct_def, field) + ", None, None]:";
+      if (!parser_.opts.one_file &&
+          (vectortype.base_type == BASE_TYPE_STRUCT || IsEnum(vectortype))) {
+        imports.insert(import_entry);
       }
-      code += "(self) -> Generator[" + return_type + ", None, None]:";
-      imports.insert(ImportMapEntry{ "typing", "Optional" });
-      if (!parser_.opts.one_file) { imports.insert(import_entry); }
     } else {
       code += "(self):";
     }
-    code += GenIndents(2) + "return (self." + name +
-            "_get(i) for i in range(self." + name + "_length()))\n\n";
+
+    if (is_vector_of_struct) {
+      code += OffsetPrefix(field, false);
+      code += GenIndents(3) + "x = self._tab.Vector(o)";
+      code += GenIndents(3) + "for i in range(self._tab.VectorLen(o)):";
+      code += GenIndents(4) +
+              "y = x + flatbuffers.number_types.UOffsetTFlags.py_type(i) * " +
+              NumToString(InlineSize(vectortype));
+      if (!vectortype.struct_def->fixed) {
+        code += GenIndents(4) + "y = self._tab.Indirect(y)";
+      }
+      code += GenIndents(4) + "obj = " + TypeName(field) + "()";
+      code += GenIndents(4) + "obj.init(self._tab.Bytes, y)";
+      code += GenIndents(4) + "yield obj\n\n";
+    } else {
+      code += GenIndents(2) + "return (self." + name +
+              "_get(i) for i in range(self." + name + "_length()))\n\n";
+    }
   }
 
   // Get the value of a vector's struct member.
@@ -1180,7 +1198,8 @@ class PythonGenerator : public BaseGenerator {
     GenReceiver(struct_def, code_ptr);
     code += namer_.Method(field);
     if (parser_.opts.python_typing) {
-      code += "_get(self, j: int)";
+      code +=
+          "_get(self, j: int) -> " + VectorElementPythonType(struct_def, field);
     } else {
       code += "_get(self, j)";
     }
@@ -1193,17 +1212,27 @@ class PythonGenerator : public BaseGenerator {
     getter += "a + flatbuffers.number_types.UOffsetTFlags.py_type(j * ";
     getter += NumToString(InlineSize(vectortype)) + "))";
 
-    if (IsEnum(field.value.type.VectorType())) {
-      getter = field.value.type.enum_def->name + "(" + getter + ")";
+    if (IsString(vectortype)) {
+      getter += ".decode('utf-8')";
+    } else if (IsEnum(vectortype)) {
+      getter = vectortype.enum_def->name + "(" + getter + ")";
     }
     code += "return " + getter + "\n";
 
-    if (IsString(vectortype)) {
-      code += Indent + Indent + "return \"\"\n";
+    // If empty, return the zero value for the type.
+    code += Indent + Indent + "return ";
+    if (IsEnum(vectortype)) {
+      code += vectortype.enum_def->name + "(0)";
+    } else if (IsString(vectortype)) {
+      code += "\"\"";
+    } else if (IsBool(vectortype.base_type)) {
+      code += "False";
+    } else if (IsFloat(vectortype.base_type)) {
+      code += "0.0";
     } else {
-      code += Indent + Indent + "return 0\n";
+      code += "0";
     }
-    code += "\n";
+    code += "\n\n";
   }
 
   // Returns a non-struct vector as a numpy array. Much faster
@@ -1827,6 +1856,20 @@ class PythonGenerator : public BaseGenerator {
     }
   }
 
+  std::string VectorElementPythonType(const StructDef &struct_def,
+                                      const FieldDef &field) const {
+    const Type vectortype = field.value.type.VectorType();
+    if (IsEnum(vectortype)) { return vectortype.enum_def->name; }
+    if (vectortype.base_type == BASE_TYPE_STRUCT) {
+      return ReturnType(struct_def, field);
+    }
+    if (vectortype.base_type == BASE_TYPE_STRING ||
+        IsScalar(vectortype.base_type)) {
+      return GetBasePythonTypeForScalarAndString(vectortype.base_type);
+    }
+    return "Any";
+  }
+
   std::string GetDefaultValue(const FieldDef &field) const {
     BaseType base_type = field.value.type.base_type;
     if (IsVector(field.value.type)) {
@@ -2026,10 +2069,9 @@ class PythonGenerator : public BaseGenerator {
         }
       }
 
-      const auto default_value = GetDefaultValue(field);
       // Wrties the init statement.
-      if (default_value == "None" &&
-          field_type.compare(0, 9, "Optional[") != 0) {
+      const auto default_value = GetDefaultValue(field);
+      if (default_value == "None" && !field_type.starts_with("Optional[")) {
         import_typing_list.insert("Optional");
         field_type = "Optional[" + field_type + "]";
       }
@@ -2182,7 +2224,7 @@ class PythonGenerator : public BaseGenerator {
 
     code += GenIndents(1) + "def __repr__(self) -> str:";
     code += GenIndents(2) + "if not hasattr(self, '_tab'):";
-    code += GenIndents(3) + " return '" + struct_object + "()'";
+    code += GenIndents(3) + "return '" + struct_object + "()'";
     code += GenIndents(2) + "return f'" + struct_object + "(";
     for (auto it = struct_def.fields.vec.begin();
          it != struct_def.fields.vec.end(); ++it) {
