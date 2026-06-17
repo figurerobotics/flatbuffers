@@ -2028,9 +2028,14 @@ class PythonGenerator : public BaseGenerator {
 
       const auto default_value = GetDefaultValue(field);
       // Wrties the init statement.
+      if (default_value == "None" &&
+          field_type.compare(0, 9, "Optional[") != 0) {
+        import_typing_list.insert("Optional");
+        field_type = "Optional[" + field_type + "]";
+      }
       const auto field_field = namer_.Field(field);
-      code += GenIndents(2) + "self." + field_field + " = " + default_value +
-              "  # type: " + field_type;
+      code += GenIndents(2) + "self." + field_field + ": " + field_type +
+              " = " + default_value;
     }
 
     // Writes __init__ method.
@@ -2085,9 +2090,11 @@ class PythonGenerator : public BaseGenerator {
     auto &code = *code_ptr;
     const auto struct_var = namer_.Variable(struct_def);
     const auto struct_type = namer_.Type(struct_def);
+    const auto struct_object = namer_.ObjectType(struct_def);
 
     code += GenIndents(1) + "@classmethod";
-    code += GenIndents(1) + "def init_from_buf(cls, buf, pos):";
+    code += GenIndents(1) + "def init_from_buf(cls, buf, pos) -> '" +
+            struct_object + "':";
     code += GenIndents(2) + struct_var + " = " + struct_type + "()";
     code += GenIndents(2) + struct_var + ".init(buf, pos)";
     code += GenIndents(2) + "return cls.init_from_obj(" + struct_var + ")";
@@ -2099,9 +2106,11 @@ class PythonGenerator : public BaseGenerator {
     auto &code = *code_ptr;
     const auto struct_var = namer_.Variable(struct_def);
     const auto struct_type = namer_.Type(struct_def);
+    const auto struct_object = namer_.ObjectType(struct_def);
 
     code += GenIndents(1) + "@classmethod";
-    code += GenIndents(1) + "def init_from_packed_buf(cls, buf, pos=0):";
+    code += GenIndents(1) + "def init_from_packed_buf(cls, buf, pos=0) -> '" +
+            struct_object + "':";
     code += GenIndents(2) +
             "n = flatbuffers.encode.Get(flatbuffers.packer.uoffset, buf, pos)";
     code += GenIndents(2) + "return cls.init_from_buf(buf, pos+n)";
@@ -2115,7 +2124,8 @@ class PythonGenerator : public BaseGenerator {
     const auto struct_object = namer_.ObjectType(struct_def);
 
     code += GenIndents(1) + "@classmethod";
-    code += GenIndents(1) + "def init_from_obj(cls, " + struct_var + "):";
+    code += GenIndents(1) + "def init_from_obj(cls, " + struct_var + ") -> '" +
+            struct_object + "':";
     code += GenIndents(2) + "x = " + struct_object + "()";
     code += GenIndents(2) + "x.unpack(" + struct_var + ")";
     code += GenIndents(2) + "return x";
