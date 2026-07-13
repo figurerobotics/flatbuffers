@@ -532,8 +532,11 @@ class PythonStubGenerator {
     stub << "class " << namer_.Type(*enum_def);
 
     if (version_.major == 3) {
-      imports->Import("enum", "IntEnum");
-      stub << "(IntEnum)";
+      // Keep in sync with BeginEnum: bit_flags enums are IntFlag at runtime.
+      const bool is_flags = enum_def->attributes.Lookup("bit_flags") != nullptr;
+      const std::string base = is_flags ? "IntFlag" : "IntEnum";
+      imports->Import("enum", base);
+      stub << "(" << base << ")";
     } else {
       stub << "(object)";
     }
@@ -623,9 +626,16 @@ class PythonGenerator : public BaseGenerator {
   // Begin enum code with a class declaration.
   void BeginEnum(const EnumDef &enum_def, std::string *code_ptr,
                  ImportMap &one_file_imports) const {
-    one_file_imports.insert(ImportMapEntry{ "enum", "Enum" });
+    // bit_flags enums hold OR-ed combinations of members, which a plain Enum
+    // cannot represent (constructing one raises ValueError, which the scalar
+    // getters swallow into the field default). IntFlag composes bits and
+    // IntEnum keeps int() / int comparisons working; both match the IntEnum
+    // declaration already emitted in the .pyi stubs (GenerateEnumStub).
+    const bool is_flags = enum_def.attributes.Lookup("bit_flags") != nullptr;
+    const std::string base = is_flags ? "IntFlag" : "IntEnum";
+    one_file_imports.insert(ImportMapEntry{ "enum", base });
     auto &code = *code_ptr;
-    code += "class " + namer_.Type(enum_def) + "(Enum):\n";
+    code += "class " + namer_.Type(enum_def) + "(" + base + "):\n";
   }
 
   // Starts a new line and then indents.
