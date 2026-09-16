@@ -2611,7 +2611,9 @@ class TsGenerator : public BaseGenerator {
           union_traits_code += "  [" + imp.object_name + ", " + enum_val + "],\n";
         }
 
-        union_traits_code += "]);\n\n";
+        union_traits_code += "]);\n";
+        union_traits_code += "static readonly " + field_method +
+                             "TypeEnum = " + enum_type_name + ";\n\n";
       }
     }
 
