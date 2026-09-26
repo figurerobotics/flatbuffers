@@ -40,6 +40,7 @@ LANGUAGE_EXTS = {
     "rust": ".rs",
     "ts": ".ts",
     "kotlin": ".kt",
+    "nanobind": ".cpp",
     "nim": ".nim",
     "php": ".php",
     "pybind": ".cpp",

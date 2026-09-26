@@ -33,6 +33,7 @@
 #include "idl_gen_json_schema.h"
 #include "idl_gen_kotlin.h"
 #include "idl_gen_lobster.h"
+#include "idl_gen_nanobind.h"
 #include "idl_gen_php.h"
 #include "idl_gen_pybind.h"
 #include "idl_gen_python.h"
@@ -150,6 +151,11 @@ int main(int argc, const char *argv[]) {
       flatbuffers::FlatCOption{ "", "pybind", "",
                                 "Generate pybind files for tables/structs" },
       flatbuffers::NewPybindCodeGenerator());
+
+  flatc.RegisterCodeGenerator(
+      flatbuffers::FlatCOption{ "", "nanobind", "",
+                                "Generate nanobind files for tables/structs" },
+      flatbuffers::NewNanobindCodeGenerator());
 
   flatc.RegisterCodeGenerator(
       flatbuffers::FlatCOption{ "p", "python", "",

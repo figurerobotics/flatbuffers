@@ -1,0 +1,12 @@
+load("@nanobind_bazel//:build_defs.bzl", "nanobind_library")
+
+package(default_visibility = ["//visibility:public"])
+
+nanobind_library(
+    name = "nanobind",
+    hdrs = glob([
+        "include/flatbuffers/nanobind/*.h",
+    ]),
+    includes = ["include"],
+    deps = ["//:runtime_cc"],
+)

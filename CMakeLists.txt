@@ -57,6 +57,9 @@ option(FLATBUFFERS_SKIP_MONSTER_EXTRA
 option(FLATBUFFERS_STRICT_MODE
       "Build flatbuffers with all warnings as errors (-Werror or /WX)."
       OFF)
+option(FLATBUFFERS_ENABLE_NANOBIND
+      "Include nanobind support in the flatbuffers library."
+      OFF)
 option(FLATBUFFERS_ENABLE_PYBIND
       "Include pybind11 support in the flatbuffers library."
       OFF)
@@ -161,6 +164,12 @@ if (FLATBUFFERS_ENABLE_PYBIND)
   list(APPEND FlatBuffers_Library_SRCS pybind/include/flatbuffers/pybind/memory.h)
 endif()
 
+if (FLATBUFFERS_ENABLE_NANOBIND)
+  list(APPEND FlatBuffers_Library_SRCS nanobind/include/flatbuffers/nanobind/bind_array.h)
+  list(APPEND FlatBuffers_Library_SRCS nanobind/include/flatbuffers/nanobind/casters.h)
+  list(APPEND FlatBuffers_Library_SRCS nanobind/include/flatbuffers/nanobind/memory.h)
+endif()
+
 set(FlatBuffers_Compiler_SRCS
   ${FlatBuffers_Library_SRCS}
   src/idl_gen_binary.cpp
@@ -174,6 +183,7 @@ set(FlatBuffers_Compiler_SRCS
   src/idl_gen_java.cpp
   src/idl_gen_ts.cpp
   src/idl_gen_php.cpp
+  src/idl_gen_nanobind.cpp
   src/idl_gen_pybind.cpp
   src/idl_gen_python.cpp
   src/idl_gen_lobster.cpp
@@ -447,6 +457,12 @@ if (FLATBUFFERS_ENABLE_PYBIND)
   include_directories(pybind/include)
 endif()
 
+if (FLATBUFFERS_ENABLE_NANOBIND)
+  find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+  find_package(nanobind CONFIG REQUIRED)
+  include_directories(nanobind/include)
+endif()
+
 if(FLATBUFFERS_BUILD_FLATLIB)
   add_library(flatbuffers STATIC ${FlatBuffers_Library_SRCS})
 
@@ -540,6 +556,13 @@ function(compile_schema_for_pybind TARGET_NAME SRC_FBS PYBIND_OPT)
   target_compile_features("${TARGET_NAME}" PRIVATE cxx_std_17) # requires cmake 3.8
 endfunction()
 
+function(compile_schema_for_nanobind TARGET_NAME SRC_FBS NANOBIND_OPT)
+  compile_schema("${SRC_FBS}" "${NANOBIND_OPT}" "cpp" NANOBIND_GEN_FILE)
+  nanobind_add_module("${TARGET_NAME}" "${NANOBIND_GEN_FILE}")
+  target_include_directories("${TARGET_NAME}" PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+  target_compile_features("${TARGET_NAME}" PRIVATE cxx_std_17)
+endfunction()
+
 if(FLATBUFFERS_BUILD_TESTS)
   add_executable(flattests ${FlatBuffers_Tests_SRCS})
   target_link_libraries(flattests PRIVATE $<BUILD_INTERFACE:ProjectConfig>)
@@ -623,6 +646,14 @@ if(FLATBUFFERS_BUILD_TESTS)
     # compile_schema_for_test(tests/monster_test.fbs "${FLATC_OPT_SCOPED_ENUMS};${FLATC_TEST_INCL_OPT}")
     # compile_schema_for_pybind(monster_test_generated tests/monster_test.fbs "${FLATC_PYBIND_OPT_SCOPED_ENUMS};${FLATC_TEST_INCL_OPT}")
   endif(FLATBUFFERS_ENABLE_PYBIND)
+
+  if(FLATBUFFERS_ENABLE_NANOBIND)
+    SET(FLATC_NANOBIND_OPT --nanobind --gen-mutable --gen-object-api --reflect-names)
+    SET(FLATC_NANOBIND_OPT_SCOPED_ENUMS ${FLATC_NANOBIND_OPT};--scoped-enums)
+    compile_schema_for_nanobind(alignment_test_nb tests/alignment_test.fbs "${FLATC_NANOBIND_OPT}")
+    compile_schema_for_nanobind(arrays_test_nb tests/arrays_test.fbs "${FLATC_NANOBIND_OPT_SCOPED_ENUMS}")
+    compile_schema_for_nanobind(monster_nb samples/monster.fbs "${FLATC_NANOBIND_OPT}")
+  endif(FLATBUFFERS_ENABLE_NANOBIND)
 endif()
 
 if(FLATBUFFERS_BUILD_GRPCTEST)

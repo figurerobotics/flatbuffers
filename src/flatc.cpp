@@ -267,6 +267,10 @@ const static FlatCOption flatc_options[] = {
     "The suffix that is assumed for generated C++ headers that are included by "
     "the pybind module. This is needed if the C++ headers are generated with a "
     "different `--filename-suffix` than the pybind module." },
+  { "", "nanobind-include-filename-suffix", "",
+    "The suffix that is assumed for generated C++ headers that are included by "
+    "the nanobind module. This is needed if the C++ headers are generated with "
+    "a different `--filename-suffix` than the nanobind module." },
   { "", "file-names-only", "",
     "Print out generated file names without writing to the files" },
   { "", "grpc-filename-suffix", "SUFFIX",
@@ -703,6 +707,9 @@ FlatCOptions FlatCompiler::ParseFromCommandLineArguments(int argc,
       } else if (arg == "--pybind-include-filename-suffix") {
         if (++argi >= argc) Error("missing value following: " + arg, true);
         opts.pybind_include_filename_suffix = argv[argi];
+      } else if (arg == "--nanobind-include-filename-suffix") {
+        if (++argi >= argc) Error("missing value following: " + arg, true);
+        opts.nanobind_include_filename_suffix = argv[argi];
       } else if (arg == "--annotate-sparse-vectors") {
         options.annotate_include_vector_contents = false;
       } else if (arg == "--annotate") {
