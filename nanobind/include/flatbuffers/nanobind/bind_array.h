@@ -355,6 +355,18 @@ inline std::string SequenceClassSignature(const char *name, const char *base,
          element_name + "])";
 }
 
+// Returns `signature` with each "{T}" replaced by the element type name.
+inline std::string ElementSignature(const char *signature,
+                                    const std::string &element_name) {
+  std::string result = signature;
+  const std::string placeholder = "{T}";
+  for (size_t pos = result.find(placeholder); pos != std::string::npos;
+       pos = result.find(placeholder, pos + element_name.size())) {
+    result.replace(pos, placeholder.size(), element_name);
+  }
+  return result;
+}
+
 // Registers `cls` as a virtual subclass of collections.abc.{base}.
 inline void RegisterAbc(nb::handle cls, const char *base) {
   nb::module_::import_("collections.abc").attr(base).attr("register")(cls);
@@ -371,7 +383,10 @@ inline bool ReuseBinding(nb::handle scope, const char *name) {
 }
 
 template<typename ArrayT, typename Ops, typename PyClass>
-inline void BindReadOperations(PyClass &c) {
+inline void BindReadOperations(PyClass &c, const std::string &element_name) {
+  auto sig = [&element_name](const char *signature) {
+    return ElementSignature(signature, element_name);
+  };
   using return_type = typename Ops::return_type;
   using Iterator = IndexIterator<ArrayT, Ops>;
 
@@ -383,20 +398,24 @@ inline void BindReadOperations(PyClass &c) {
       [](ArrayT &self, Py_ssize_t i) -> return_type {
         return Ops::Get(self, WrapIndexOrThrow(i, self.size()));
       },
-      Ops::policy);
-  c.def("__getitem__",
-        [](nb::handle self_h,
-           const nb::slice &slice) -> nb::typed<nb::list, return_type> {
-          ArrayT &self = nb::cast<ArrayT &>(self_h);
-          auto [start, stop, step, length] = slice.compute(self.size());
-          (void)stop;
-          nb::list result;
-          for (size_t i = 0; i < length; ++i) {
-            result.append(GetObject<ArrayT, Ops>(
-                self, self_h, static_cast<size_t>(start + step * i)));
-          }
-          return nb::borrow<nb::typed<nb::list, return_type>>(result);
-        });
+      Ops::policy,
+      nb::sig(sig("def __getitem__(self, index: int, /) -> {T}").c_str()));
+  c.def(
+      "__getitem__",
+      [](nb::handle self_h,
+         const nb::slice &slice) -> nb::typed<nb::list, return_type> {
+        ArrayT &self = nb::cast<ArrayT &>(self_h);
+        auto [start, stop, step, length] = slice.compute(self.size());
+        (void)stop;
+        nb::list result;
+        for (size_t i = 0; i < length; ++i) {
+          result.append(GetObject<ArrayT, Ops>(
+              self, self_h, static_cast<size_t>(start + step * i)));
+        }
+        return nb::borrow<nb::typed<nb::list, return_type>>(result);
+      },
+      nb::sig(
+          sig("def __getitem__(self, index: slice, /) -> list[{T}]").c_str()));
 
   c.def(
       "__iter__",
@@ -416,10 +435,13 @@ inline void BindReadOperations(PyClass &c) {
       },
       nb::keep_alive<0, 1>());
 
-  c.def("__contains__", [](nb::handle self_h, nb::handle value) {
-    ArrayT &self = nb::cast<ArrayT &>(self_h);
-    return FindIndex<ArrayT, Ops>(self, self_h, value, 0, self.size()) >= 0;
-  });
+  c.def(
+      "__contains__",
+      [](nb::handle self_h, nb::handle value) {
+        ArrayT &self = nb::cast<ArrayT &>(self_h);
+        return FindIndex<ArrayT, Ops>(self, self_h, value, 0, self.size()) >= 0;
+      },
+      nb::sig("def __contains__(self, value: object, /) -> bool"));
   c.def(
       "index",
       [](nb::handle self_h, nb::handle value, Py_ssize_t start,
@@ -435,15 +457,21 @@ inline void BindReadOperations(PyClass &c) {
         }
         return index;
       },
-      nb::arg("value"), nb::arg("start") = 0, nb::arg("stop") = PY_SSIZE_T_MAX);
-  c.def("count", [](nb::handle self_h, nb::handle value) {
-    ArrayT &self = nb::cast<ArrayT &>(self_h);
-    size_t count = 0;
-    for (size_t i = 0; i < self.size(); ++i) {
-      if (GetObject<ArrayT, Ops>(self, self_h, i).equal(value)) { ++count; }
-    }
-    return count;
-  });
+      // Matches `list.index`, whose `stop` defaults to sys.maxsize.
+      nb::arg(), nb::arg() = 0, nb::arg() = PY_SSIZE_T_MAX,
+      nb::sig("def index(self, value: object, start: int = 0, stop: int = "
+              "sys.maxsize, /) -> int"));
+  c.def(
+      "count",
+      [](nb::handle self_h, nb::handle value) {
+        ArrayT &self = nb::cast<ArrayT &>(self_h);
+        size_t count = 0;
+        for (size_t i = 0; i < self.size(); ++i) {
+          if (GetObject<ArrayT, Ops>(self, self_h, i).equal(value)) { ++count; }
+        }
+        return count;
+      },
+      nb::sig("def count(self, value: object, /) -> int"));
 
   // Elementwise equality with any (non-string) sequence.
   c.def(
@@ -484,18 +512,29 @@ inline void BindReadOperations(PyClass &c) {
 
 // Write operations for ::flatbuffers::Array or ::flatbuffers::Vector.
 template<typename ArrayT, typename PyClass>
-inline void BindFbsWriteOperations(PyClass &c) {
+inline void BindFbsWriteOperations(PyClass &c,
+                                   const std::string &element_name) {
   using const_arg_type = typename DefaultOps<ArrayT>::const_arg_type;
 
-  c.def("__setitem__", [](ArrayT &self, Py_ssize_t i, const_arg_type value) {
-    self.Mutate(static_cast<uoffset_t>(WrapIndexOrThrow(i, self.size())),
-                value);
-  });
+  c.def(
+      "__setitem__",
+      [](ArrayT &self, Py_ssize_t i, const_arg_type value) {
+        self.Mutate(static_cast<uoffset_t>(WrapIndexOrThrow(i, self.size())),
+                    value);
+      },
+      nb::sig(ElementSignature(
+                  "def __setitem__(self, index: int, value: {T}, /) -> None",
+                  element_name)
+                  .c_str()));
 }
 
 // Write operations for a std::vector.
 template<typename ArrayT, typename Ops, typename PyClass>
-inline void BindStdVectorWriteOperations(PyClass &c) {
+inline void BindStdVectorWriteOperations(PyClass &c,
+                                         const std::string &element_name) {
+  auto sig = [&element_name](const char *signature) {
+    return ElementSignature(signature, element_name);
+  };
   using const_arg_type = typename Ops::const_arg_type;
   using stored_type = typename Ops::stored_type;
   using Iterable = nb::typed<nb::iterable, const_arg_type>;
@@ -509,55 +548,72 @@ inline void BindStdVectorWriteOperations(PyClass &c) {
     return result;
   };
 
-  c.def("__setitem__", [](ArrayT &self, Py_ssize_t i, const_arg_type value) {
-    self[WrapIndexOrThrow(i, self.size())] = Ops::New(value);
-  });
-  c.def("__setitem__", [from_iterable](ArrayT &self, const nb::slice &slice,
-                                       Iterable values) {
-    auto [start, stop, step, length] = slice.compute(self.size());
-    std::vector<stored_type> items = from_iterable(values);
-    if (step == 1) {
-      const auto first = self.begin() + start;
-      const auto last = first + static_cast<Py_ssize_t>(length);
-      self.erase(first, last);
-      self.insert(self.begin() + start, std::make_move_iterator(items.begin()),
-                  std::make_move_iterator(items.end()));
-      return;
-    }
-    (void)stop;
-    if (items.size() != length) {
-      throw nb::value_error(
-          nb::str("attempt to assign sequence of size {} to extended slice "
-                  "of size {}")
-              .format(items.size(), length)
-              .c_str());
-    }
-    for (size_t i = 0; i < length; ++i) {
-      self[static_cast<size_t>(start + step * i)] = std::move(items[i]);
-    }
-  });
-  c.def("__delitem__", [](ArrayT &self, Py_ssize_t i) {
-    self.erase(self.begin() + WrapIndexOrThrow(i, self.size()));
-  });
-  c.def("__delitem__", [](ArrayT &self, const nb::slice &slice) {
-    auto [start, stop, step, length] = slice.compute(self.size());
-    (void)stop;
-    if (step < 0) {
-      start += step * static_cast<Py_ssize_t>(length - 1);
-      step = -step;
-    }
-    // Erase from the back so the remaining indices stay valid.
-    for (size_t i = length; i > 0; --i) {
-      self.erase(self.begin() + start + step * static_cast<Py_ssize_t>(i - 1));
-    }
-  });
+  c.def(
+      "__setitem__",
+      [](ArrayT &self, Py_ssize_t i, const_arg_type value) {
+        self[WrapIndexOrThrow(i, self.size())] = Ops::New(value);
+      },
+      nb::sig(sig("def __setitem__(self, index: int, value: {T}, /) -> None")
+                  .c_str()));
+  c.def(
+      "__setitem__",
+      [from_iterable](ArrayT &self, const nb::slice &slice, Iterable values) {
+        auto [start, stop, step, length] = slice.compute(self.size());
+        std::vector<stored_type> items = from_iterable(values);
+        if (step == 1) {
+          const auto first = self.begin() + start;
+          const auto last = first + static_cast<Py_ssize_t>(length);
+          self.erase(first, last);
+          self.insert(self.begin() + start,
+                      std::make_move_iterator(items.begin()),
+                      std::make_move_iterator(items.end()));
+          return;
+        }
+        (void)stop;
+        if (items.size() != length) {
+          throw nb::value_error(
+              nb::str("attempt to assign sequence of size {} to extended slice "
+                      "of size {}")
+                  .format(items.size(), length)
+                  .c_str());
+        }
+        for (size_t i = 0; i < length; ++i) {
+          self[static_cast<size_t>(start + step * i)] = std::move(items[i]);
+        }
+      },
+      nb::sig(sig("def __setitem__(self, index: slice, value: "
+                  "collections.abc.Iterable[{T}], /) -> None")
+                  .c_str()));
+  c.def(
+      "__delitem__",
+      [](ArrayT &self, Py_ssize_t i) {
+        self.erase(self.begin() + WrapIndexOrThrow(i, self.size()));
+      },
+      nb::sig("def __delitem__(self, index: int, /) -> None"));
+  c.def(
+      "__delitem__",
+      [](ArrayT &self, const nb::slice &slice) {
+        auto [start, stop, step, length] = slice.compute(self.size());
+        (void)stop;
+        if (step < 0) {
+          start += step * static_cast<Py_ssize_t>(length - 1);
+          step = -step;
+        }
+        // Erase from the back so the remaining indices stay valid.
+        for (size_t i = length; i > 0; --i) {
+          self.erase(self.begin() + start +
+                     step * static_cast<Py_ssize_t>(i - 1));
+        }
+      },
+      nb::sig("def __delitem__(self, index: slice, /) -> None"));
 
   c.def(
       "insert",
       [](ArrayT &self, Py_ssize_t i, const_arg_type value) {
         self.insert(self.begin() + ClampIndex(i, self.size()), Ops::New(value));
       },
-      nb::arg("index"), nb::arg("value"));
+      nb::sig(
+          sig("def insert(self, index: int, value: {T}, /) -> None").c_str()));
 
   // Copy appending.
   c.def(
@@ -565,7 +621,7 @@ inline void BindStdVectorWriteOperations(PyClass &c) {
       [](ArrayT &self, const_arg_type value) {
         self.push_back(Ops::New(value));
       },
-      nb::arg("value"));
+      nb::sig(sig("def append(self, value: {T}, /) -> None").c_str()));
   c.def(
       "extend",
       [from_iterable](ArrayT &self, Iterable values) {
@@ -573,7 +629,9 @@ inline void BindStdVectorWriteOperations(PyClass &c) {
         self.insert(self.end(), std::make_move_iterator(items.begin()),
                     std::make_move_iterator(items.end()));
       },
-      nb::arg("values"));
+      nb::sig(sig("def extend(self, values: collections.abc.Iterable[{T}], /) "
+                  "-> None")
+                  .c_str()));
   c.def(
       "__iadd__",
       [from_iterable](nb::handle self_h,
@@ -584,7 +642,9 @@ inline void BindStdVectorWriteOperations(PyClass &c) {
                     std::make_move_iterator(items.end()));
         return nb::borrow<nb::typed<nb::object, ArrayT>>(self_h);
       },
-      nb::arg("values"));
+      nb::sig(sig("def __iadd__(self, values: collections.abc.Iterable[{T}], "
+                  "/) -> typing_extensions.Self")
+                  .c_str()));
 
   c.def(
       "pop",
@@ -596,7 +656,8 @@ inline void BindStdVectorWriteOperations(PyClass &c) {
         return nb::borrow<nb::typed<nb::object, typename Ops::return_type>>(
             Ops::Take(std::move(value)));
       },
-      nb::arg("index") = -1);
+      nb::arg() = -1,
+      nb::sig(sig("def pop(self, index: int = -1, /) -> {T}").c_str()));
   c.def(
       "remove",
       [](nb::handle self_h, nb::handle value) {
@@ -609,7 +670,9 @@ inline void BindStdVectorWriteOperations(PyClass &c) {
         }
         self.erase(self.begin() + index);
       },
-      nb::arg("value"));
+      // Like `list.remove`, any value is accepted (and raises ValueError if it
+      // is not found).
+      nb::sig(sig("def remove(self, value: {T}, /) -> None").c_str()));
   c.def("clear", [](ArrayT &self) { self.clear(); });
   c.def("reverse",
         [](ArrayT &self) { std::reverse(self.begin(), self.end()); });
@@ -628,8 +691,12 @@ inline void BindStdVectorAllocOperations(PyClass &c) {
       },
       Ops::policy);
 
-  c.def("reserve", [](ArrayT &self, size_t size) { self.reserve(size); });
-  c.def("resize", [](ArrayT &self, size_t size) { self.resize(size); });
+  c.def(
+      "reserve", [](ArrayT &self, size_t size) { self.reserve(size); },
+      nb::sig("def reserve(self, size: int, /) -> None"));
+  c.def(
+      "resize", [](ArrayT &self, size_t size) { self.resize(size); },
+      nb::sig("def resize(self, size: int, /) -> None"));
 }
 
 // Returns the data pointer of an array for the buffer protocol.
@@ -757,10 +824,10 @@ template<typename ArrayT>
 inline void BindArrayReadonly(nb::handle scope, const char *name) {
   using Ops = detail::DefaultOps<ArrayT>;
   if (detail::ReuseBinding<ArrayT>(scope, name)) { return; }
-  auto c = detail::MakeClass<ArrayT>(
-      scope, name, "Sequence",
-      detail::ElementTypeName<typename Ops::return_type>(scope));
-  detail::BindReadOperations<ArrayT, Ops>(c);
+  const std::string element_name =
+      detail::ElementTypeName<typename Ops::return_type>(scope);
+  auto c = detail::MakeClass<ArrayT>(scope, name, "Sequence", element_name);
+  detail::BindReadOperations<ArrayT, Ops>(c, element_name);
 }
 
 // Binds a ::flatbuffers::Array or ::flatbuffers::Vector.
@@ -768,11 +835,11 @@ template<typename ArrayT>
 inline void BindArrayReadwrite(nb::handle scope, const char *name) {
   using Ops = detail::DefaultOps<ArrayT>;
   if (detail::ReuseBinding<ArrayT>(scope, name)) { return; }
-  auto c = detail::MakeClass<ArrayT>(
-      scope, name, "Sequence",
-      detail::ElementTypeName<typename Ops::return_type>(scope));
-  detail::BindReadOperations<ArrayT, Ops>(c);
-  detail::BindFbsWriteOperations<ArrayT>(c);
+  const std::string element_name =
+      detail::ElementTypeName<typename Ops::return_type>(scope);
+  auto c = detail::MakeClass<ArrayT>(scope, name, "Sequence", element_name);
+  detail::BindReadOperations<ArrayT, Ops>(c, element_name);
+  detail::BindFbsWriteOperations<ArrayT>(c, element_name);
 }
 
 // Binds a ::flatbuffers::Array or ::flatbuffers::Vector whose data type is
@@ -781,12 +848,13 @@ template<typename ArrayT>
 inline void BindArrayArithmetic(nb::handle scope, const char *name) {
   using Ops = detail::DefaultOps<ArrayT>;
   if (detail::ReuseBinding<ArrayT>(scope, name)) { return; }
-  auto c = detail::MakeClass<ArrayT>(
-      scope, name, "Sequence",
-      detail::ElementTypeName<typename Ops::return_type>(scope),
-      nb::type_slots(detail::BufferSlots<ArrayT>()));
-  detail::BindReadOperations<ArrayT, Ops>(c);
-  detail::BindFbsWriteOperations<ArrayT>(c);
+  const std::string element_name =
+      detail::ElementTypeName<typename Ops::return_type>(scope);
+  auto c =
+      detail::MakeClass<ArrayT>(scope, name, "Sequence", element_name,
+                                nb::type_slots(detail::BufferSlots<ArrayT>()));
+  detail::BindReadOperations<ArrayT, Ops>(c, element_name);
+  detail::BindFbsWriteOperations<ArrayT>(c, element_name);
   detail::BindArithmeticOperations<ArrayT>(c);
 }
 
@@ -795,11 +863,12 @@ template<typename ArrayT>
 inline void BindStdVector(nb::handle scope, const char *name) {
   using Ops = detail::StdVectorOps<ArrayT>;
   if (detail::ReuseBinding<ArrayT>(scope, name)) { return; }
-  auto c = detail::MakeClass<ArrayT>(
-      scope, name, "MutableSequence",
-      detail::ElementTypeName<typename Ops::return_type>(scope));
-  detail::BindReadOperations<ArrayT, Ops>(c);
-  detail::BindStdVectorWriteOperations<ArrayT, Ops>(c);
+  const std::string element_name =
+      detail::ElementTypeName<typename Ops::return_type>(scope);
+  auto c =
+      detail::MakeClass<ArrayT>(scope, name, "MutableSequence", element_name);
+  detail::BindReadOperations<ArrayT, Ops>(c, element_name);
+  detail::BindStdVectorWriteOperations<ArrayT, Ops>(c, element_name);
   detail::BindStdVectorAllocOperations<ArrayT, Ops>(c);
 }
 
@@ -811,9 +880,9 @@ inline void BindStdVectorArithmetic(nb::handle scope, const char *name) {
   if (detail::ReuseBinding<ArrayT>(scope, name)) { return; }
   constexpr bool kHasBuffer =
       !std::is_same<typename ArrayT::value_type, bool>::value;
+  const std::string element_name =
+      detail::ElementTypeName<typename Ops::return_type>(scope);
   auto c = [&] {
-    const std::string element_name =
-        detail::ElementTypeName<typename Ops::return_type>(scope);
     // std::vector<bool> is bit-packed, so it cannot expose a buffer.
     if constexpr (kHasBuffer) {
       return detail::MakeClass<ArrayT>(
@@ -824,8 +893,8 @@ inline void BindStdVectorArithmetic(nb::handle scope, const char *name) {
                                        element_name);
     }
   }();
-  detail::BindReadOperations<ArrayT, Ops>(c);
-  detail::BindStdVectorWriteOperations<ArrayT, Ops>(c);
+  detail::BindReadOperations<ArrayT, Ops>(c, element_name);
+  detail::BindStdVectorWriteOperations<ArrayT, Ops>(c, element_name);
   detail::BindStdVectorAllocOperations<ArrayT, Ops>(c);
   if constexpr (kHasBuffer) { detail::BindArithmeticOperations<ArrayT>(c); }
 }
@@ -837,11 +906,12 @@ inline void BindUnionStdVector(nb::handle scope, const char *name,
                                const std::string &type_var) {
   using Ops = detail::UnionStdVectorOps<Traits>;
   if (detail::ReuseBinding<ArrayT>(scope, name)) { return; }
-  auto c = detail::MakeClass<ArrayT>(
-      scope, name, "MutableSequence",
-      detail::VariantTypeNames<typename Traits::variant_type>::Get(scope));
-  detail::BindReadOperations<ArrayT, Ops>(c);
-  detail::BindStdVectorWriteOperations<ArrayT, Ops>(c);
+  const std::string element_name =
+      detail::VariantTypeNames<typename Traits::variant_type>::Get(scope);
+  auto c =
+      detail::MakeClass<ArrayT>(scope, name, "MutableSequence", element_name);
+  detail::BindReadOperations<ArrayT, Ops>(c, element_name);
+  detail::BindStdVectorWriteOperations<ArrayT, Ops>(c, element_name);
 
   const std::string add_signature =
       "def add(self, union_type: type[" + type_var + "], /) -> " + type_var;
@@ -854,7 +924,9 @@ inline void BindUnionStdVector(nb::handle scope, const char *name,
         return Traits::Get(self.back());
       },
       nb::rv_policy::reference_internal, nb::sig(add_signature.c_str()));
-  c.def("reserve", [](ArrayT &self, size_t size) { self.reserve(size); });
+  c.def(
+      "reserve", [](ArrayT &self, size_t size) { self.reserve(size); },
+      nb::sig("def reserve(self, size: int, /) -> None"));
 }
 
 // Binds the view of a packed union vector field.
@@ -863,10 +935,10 @@ inline void BindUnionFbsVector(nb::handle scope, const char *name) {
   using ArrayT = detail::UnionFbsVectorView<Traits>;
   using Ops = detail::UnionFbsVectorOps<Traits>;
   if (detail::ReuseBinding<ArrayT>(scope, name)) { return; }
-  auto c = detail::MakeClass<ArrayT>(
-      scope, name, "Sequence",
-      detail::VariantTypeNames<typename Traits::variant_type>::Get(scope));
-  detail::BindReadOperations<ArrayT, Ops>(c);
+  const std::string element_name =
+      detail::VariantTypeNames<typename Traits::variant_type>::Get(scope);
+  auto c = detail::MakeClass<ArrayT>(scope, name, "Sequence", element_name);
+  detail::BindReadOperations<ArrayT, Ops>(c, element_name);
 }
 
 }  // namespace nanobind
