@@ -263,6 +263,11 @@ std::string CppIdentifier(std::string name) {
   return result;
 }
 
+bool IsBoolArrayOrVector(const Type &type) {
+  return (IsArray(type) || IsVector(type)) &&
+         type.VectorType().base_type == BASE_TYPE_BOOL;
+}
+
 bool IsUnionVector(const Type &type) {
   return IsVector(type) && type.element == BASE_TYPE_UNION;
 }
@@ -720,7 +725,11 @@ class NanobindGenerator : public BaseGenerator {
         const auto element_type = field_type.VectorType();
         const auto nanobind_name = PyBindingName(field_type);
 
-        if (IsScalar(element_type.base_type)) {
+        if (IsBoolArrayOrVector(field_type)) {
+          info.definition_code.insert(
+              "::flatbuffers::nanobind::BindArrayArithmetic<" +
+              CppBoolViewType(field_type) + ">(m, \"" + nanobind_name + "\");");
+        } else if (IsScalar(element_type.base_type)) {
           info.definition_code.insert(
               "::flatbuffers::nanobind::BindArrayArithmetic<" + cpp_type +
               ">(m, \"" + nanobind_name + "\");");
@@ -826,16 +835,27 @@ class NanobindGenerator : public BaseGenerator {
 
     // Keyword args constructor.
     if (field_defs.size() > 0) {
-      std::vector<std::string> arg_types, py_args;
-      arg_types.reserve(field_defs.size());
+      std::vector<std::string> ctor_params, ctor_args, py_args;
+      ctor_params.reserve(field_defs.size());
+      ctor_args.reserve(field_defs.size());
       py_args.reserve(field_defs.size());
       for (const auto *field : field_defs) {
-        arg_types.push_back(CppArgumentType(field->value.type));
+        const std::string name = cpp_namer_.Field(field->name);
+        ctor_params.push_back(CppArgumentType(field->value.type) + " " + name);
+        // Bool arrays are stored (and constructed) as uint8_t.
+        ctor_args.push_back(IsBoolArrayOrVector(field->value.type)
+                                ? "::flatbuffers::nanobind::BoolsToBytes(" +
+                                      name + ")"
+                                : name);
         py_args.push_back(PyArg(*field));
       }
       code_ += Indent() + "{{BIND_VAR}}.def(";
-      code_ += Indent(3) + "nb::init<" + StrJoin(arg_types, ", ") + ">(),";
-      code_ += Indent(3) + StrJoin(py_args, ", ") + ");";
+      code_ += Indent(3) + "\"__init__\",";
+      code_ += Indent(3) + "[]({{CPP_TYPE}} *self, " +
+               StrJoin(ctor_params, ", ") + ") {";
+      code_ += Indent(4) + "new (self) {{CPP_TYPE}}(" +
+               StrJoin(ctor_args, ", ") + ");";
+      code_ += Indent(3) + "}, " + StrJoin(py_args, ", ") + ");";
     }
 
     // Generate accessor bindings.
@@ -866,11 +886,23 @@ class NanobindGenerator : public BaseGenerator {
       }
 
       if (IsArray(field_type)) {
+        const bool is_bool = IsBoolArrayOrVector(field_type);
+        code_.SetValue("BOOL_VIEW", CppBoolViewType(field_type));
         if (!opts_.mutable_buffer) {
-          code_ += Indent() +
-                   "{{BIND_VAR}}.def_prop_ro(\"{{PY_FIELD}}\", "
-                   "&{{CPP_TYPE}}::{{CPP_FIELD}}, "
-                   "nb::rv_policy::reference_internal);";
+          if (is_bool) {
+            code_ += Indent() + "{{BIND_VAR}}.def_prop_ro(";
+            code_ += Indent(3) + "\"{{PY_FIELD}}\",";
+            code_ += Indent(3) +
+                     "[]({{CPP_TYPE}} &self) { return {{BOOL_VIEW}}{"
+                     "const_cast<{{CPP_FIELD_TYPE}} *>(self.{{CPP_FIELD}}())}; "
+                     "},";
+            code_ += Indent(3) + "nb::keep_alive<0, 1>());";
+          } else {
+            code_ += Indent() +
+                     "{{BIND_VAR}}.def_prop_ro(\"{{PY_FIELD}}\", "
+                     "&{{CPP_TYPE}}::{{CPP_FIELD}}, "
+                     "nb::rv_policy::reference_internal);";
+          }
           continue;
         }
         // Assignment copies the elements. They are copied to a temporary
@@ -880,9 +912,15 @@ class NanobindGenerator : public BaseGenerator {
         code_.SetValue("LENGTH", NumToString(field_type.fixed_length));
         code_ += Indent() + "{{BIND_VAR}}.def_prop_rw(";
         code_ += Indent(3) + "\"{{PY_FIELD}}\",";
-        code_ += Indent(3) +
-                 "[]({{CPP_TYPE}} &self) { return "
-                 "self.mutable_{{CPP_FIELD}}(); },";
+        if (is_bool) {
+          code_ += Indent(3) +
+                   "[]({{CPP_TYPE}} &self) { return "
+                   "{{BOOL_VIEW}}{self.mutable_{{CPP_FIELD}}()}; },";
+        } else {
+          code_ += Indent(3) +
+                   "[]({{CPP_TYPE}} &self) { return "
+                   "self.mutable_{{CPP_FIELD}}(); },";
+        }
         code_ += Indent(3) + "[]({{CPP_TYPE}} &self, " +
                  CppArgumentType(field_type) + " value) {";
         code_ += Indent(4) + "std::array<{{ELEMENT_TYPE}}, {{LENGTH}}> copy;";
@@ -893,7 +931,10 @@ class NanobindGenerator : public BaseGenerator {
         code_ +=
             Indent(5) + "self.mutable_{{CPP_FIELD}}()->Mutate(i, copy[i]);";
         code_ += Indent(4) + "}";
-        code_ += Indent(3) + "}, nb::rv_policy::reference_internal);";
+        code_ += Indent(3) + "}, " +
+                 (is_bool ? "nb::for_getter(nb::keep_alive<0, 1>())"
+                          : "nb::rv_policy::reference_internal") +
+                 ");";
         continue;
       }
 
@@ -1003,6 +1044,22 @@ class NanobindGenerator : public BaseGenerator {
             "std::make_optional(self.{{MUTABLE_PREFIX}}{{CPP_FIELD}}_type()"
             "); },";
         code_ += Indent(3) + "nb::rv_policy::reference_internal);";
+        continue;
+      }
+
+      if (IsBoolArrayOrVector(field_type)) {
+        code_.SetValue("BOOL_VIEW", CppBoolViewType(field_type));
+        code_.SetValue("CPP_FIELD_TYPE", CppType(field_type));
+        code_ += Indent() + "{{BIND_VAR}}.def_prop_ro(";
+        code_ += Indent(3) + "\"{{PY_FIELD}}\",";
+        code_ += Indent(3) +
+                 "[]({{CPP_TYPE}} &self) -> std::optional<{{BOOL_VIEW}}> {";
+        code_ += Indent(4) +
+                 "auto *vector = const_cast<{{CPP_FIELD_TYPE}} *>("
+                 "self.{{CPP_FIELD}}());";
+        code_ += Indent(4) + "if (vector == nullptr) { return std::nullopt; }";
+        code_ += Indent(4) + "return {{BOOL_VIEW}}{vector};";
+        code_ += Indent(3) + "}, nb::keep_alive<0, 1>());";
         continue;
       }
 
@@ -1456,8 +1513,11 @@ class NanobindGenerator : public BaseGenerator {
   std::string CppArgumentType(const Type &type, bool object_api = false,
                               bool optional = false) const {
     if (IsArray(type)) {
-      return "::flatbuffers::span<const " +
-             CppType(type.VectorType(), object_api) + ", " +
+      // Bool arrays are stored as uint8_t, but are passed as bools.
+      const std::string element_type_str =
+          IsBoolArrayOrVector(type) ? "bool"
+                                    : CppType(type.VectorType(), object_api);
+      return "::flatbuffers::span<const " + element_type_str + ", " +
              NumToString(type.fixed_length) + ">";
     }
     if (IsVector(type)) {
@@ -1498,6 +1558,10 @@ class NanobindGenerator : public BaseGenerator {
       return cpp_namer_.Namespace(*def.defined_namespace) + "::" + type_name;
     }
     return type_name;
+  }
+
+  std::string CppBoolViewType(const Type &type) const {
+    return "::flatbuffers::nanobind::BoolView<" + CppType(type) + ">";
   }
 
   // Returns the object API type which holds a union (e.g. FooUnion).
@@ -1612,7 +1676,7 @@ class NanobindGenerator : public BaseGenerator {
   std::string PyBindingName(const Type &type, bool object_api = false) const {
     if (IsScalar(type.base_type)) {
       if (type.enum_def) { return py_namer_.Type(*type.enum_def); }
-      if (object_api && IsBool(type.base_type)) { return "Bool"; }
+      if (IsBool(type.base_type)) { return "Bool"; }
       std::string scalar_type_str = StringOf(type.base_type);
       // Strip a "_t" suffix.
       if (scalar_type_str.rfind("_t") == scalar_type_str.size() - 2) {

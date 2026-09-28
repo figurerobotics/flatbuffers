@@ -26,17 +26,44 @@
 #include <nanobind/stl/variant.h>
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "flatbuffers/array.h"
+#include "flatbuffers/stl_emulation.h"
 #include "flatbuffers/vector.h"
 
 namespace flatbuffers {
 namespace nanobind {
 
 namespace nb = ::nanobind;
+
+// A view of a ::flatbuffers::Array or ::flatbuffers::Vector of bools, which are
+// stored as uint8_t. This is bound as a distinct type from arrays of uint8_t,
+// so that its elements are Python bools.
+template<typename ArrayT> struct BoolView {
+  ArrayT *array;
+
+  size_t size() const { return array->size(); }
+  bool operator[](size_t i) const {
+    return array->Get(static_cast<uoffset_t>(i)) != 0;
+  }
+  void Mutate(uoffset_t i, bool value) {
+    array->Mutate(i, static_cast<uint8_t>(value));
+  }
+  uint8_t *data() { return array->data(); }
+};
+
+// Converts bools to the uint8_t storage of a flatbuffers struct array.
+template<size_t N>
+std::array<uint8_t, N> BoolsToBytes(::flatbuffers::span<const bool, N> values) {
+  std::array<uint8_t, N> bytes;
+  std::copy(values.begin(), values.end(), bytes.begin());
+  return bytes;
+}
 
 namespace detail {
 
