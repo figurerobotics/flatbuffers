@@ -730,6 +730,7 @@ struct IDLOptions {
   bool ts_omit_entrypoint;
   ProtoIdGapAction proto_id_gap_action;
   std::string pybind_include_filename_suffix;
+  std::string nanobind_include_filename_suffix;
 
   // Possible options for the more general generator below.
   enum Language {
@@ -753,6 +754,7 @@ struct IDLOptions {
     kProto = 1 << 18,
     kKotlinKmp = 1 << 19,
     kPybind = 1 << 20,
+    kNanobind = 1 << 21,
     kMAX
   };
 
