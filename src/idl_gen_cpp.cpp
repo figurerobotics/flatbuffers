@@ -3105,6 +3105,15 @@ class CppGenerator : public BaseGenerator {
              " "
              "&_fbb)";
     code_ += "        : fbb_(_fbb) {";
+    // Pad before the table, not inside it: the vtable holds the table size,
+    // so inner padding stops tables with the same fields sharing a vtable.
+    size_t table_align = sizeof(soffset_t);
+    for (const auto *field : struct_def.fields.vec) {
+      if (!field->deprecated) {
+        table_align = (std::max)(table_align, InlineAlignment(field->value.type));
+      }
+    }
+    code_ += "    fbb_.Align(" + NumToString(table_align) + ");";
     code_ += "    start_ = fbb_.StartTable();";
     code_ += "  }";
 
