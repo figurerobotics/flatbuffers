@@ -710,35 +710,30 @@ inline void BindStdVectorWriteOperations(PyClass &c,
 template<typename ArrayT, typename Ops, typename PyClass>
 inline void BindStdVectorAllocOperations(PyClass &c,
                                          const std::string &element_name) {
-  using return_type = typename Ops::return_type;
-  using value_type = std::remove_pointer_t<return_type>;
-  if constexpr (std::is_pointer<return_type>::value &&
-                nb::detail::is_base_caster_v<
+  // In-place appending an element.
+  c.def(
+      "add",
+      [](ArrayT &self) -> typename Ops::return_type {
+        self.push_back(Ops::New());
+        return Ops::Get(self, self.size() - 1);
+      },
+      Ops::policy);
+  // For bound element types (tables, structs): appends a copy of `value` and
+  // returns the stored element, which (unlike `value`) updates the vector.
+  using value_type = std::remove_pointer_t<typename Ops::return_type>;
+  if constexpr (nb::detail::is_base_caster_v<
                     nb::detail::make_caster<value_type>>) {
-    // In-place appending a bound element (table or struct). Keyword arguments
-    // go to the element's constructor; the result is moved into the vector.
     c.def(
         "add",
-        [](ArrayT &self, nb::kwargs fields) -> return_type {
-          nb::object value = nb::type<value_type>()(**fields);
-          self.push_back(Ops::New());
-          return_type element = Ops::Get(self, self.size() - 1);
-          *element = std::move(nb::cast<value_type &>(value));
-          return element;
-        },
-        Ops::policy,
-        nb::sig(ElementSignature("def add(self, **kwargs: typing.Any) -> {T}",
-                                 element_name)
-                    .c_str()));
-  } else {
-    // In-place appending a default element.
-    c.def(
-        "add",
-        [](ArrayT &self) -> return_type {
-          self.push_back(Ops::New());
+        [](ArrayT &self,
+           const value_type &value) -> typename Ops::return_type {
+          self.push_back(Ops::New(value));
           return Ops::Get(self, self.size() - 1);
         },
-        Ops::policy);
+        Ops::policy,
+        nb::sig(ElementSignature("def add(self, value: {T}, /) -> {T}",
+                                 element_name)
+                    .c_str()));
   }
 
   c.def(
