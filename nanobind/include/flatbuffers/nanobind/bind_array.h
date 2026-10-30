@@ -708,15 +708,38 @@ inline void BindStdVectorWriteOperations(PyClass &c,
 // Operations for std::vectors whose elements can be default-constructed in
 // place.
 template<typename ArrayT, typename Ops, typename PyClass>
-inline void BindStdVectorAllocOperations(PyClass &c) {
-  // In-place appending an element.
-  c.def(
-      "add",
-      [](ArrayT &self) -> typename Ops::return_type {
-        self.push_back(Ops::New());
-        return Ops::Get(self, self.size() - 1);
-      },
-      Ops::policy);
+inline void BindStdVectorAllocOperations(PyClass &c,
+                                         const std::string &element_name) {
+  using return_type = typename Ops::return_type;
+  using value_type = std::remove_pointer_t<return_type>;
+  if constexpr (std::is_pointer<return_type>::value &&
+                nb::detail::is_base_caster_v<
+                    nb::detail::make_caster<value_type>>) {
+    // In-place appending a bound element (table or struct). Keyword arguments
+    // go to the element's constructor; the result is moved into the vector.
+    c.def(
+        "add",
+        [](ArrayT &self, nb::kwargs fields) -> return_type {
+          nb::object value = nb::type<value_type>()(**fields);
+          self.push_back(Ops::New());
+          return_type element = Ops::Get(self, self.size() - 1);
+          *element = std::move(nb::cast<value_type &>(value));
+          return element;
+        },
+        Ops::policy,
+        nb::sig(ElementSignature("def add(self, **kwargs: typing.Any) -> {T}",
+                                 element_name)
+                    .c_str()));
+  } else {
+    // In-place appending a default element.
+    c.def(
+        "add",
+        [](ArrayT &self) -> return_type {
+          self.push_back(Ops::New());
+          return Ops::Get(self, self.size() - 1);
+        },
+        Ops::policy);
+  }
 
   c.def(
       "reserve", [](ArrayT &self, size_t size) { self.reserve(size); },
@@ -896,7 +919,7 @@ inline void BindStdVector(nb::handle scope, const char *name) {
       detail::MakeClass<ArrayT>(scope, name, "MutableSequence", element_name);
   detail::BindReadOperations<ArrayT, Ops>(c, element_name);
   detail::BindStdVectorWriteOperations<ArrayT, Ops>(c, element_name);
-  detail::BindStdVectorAllocOperations<ArrayT, Ops>(c);
+  detail::BindStdVectorAllocOperations<ArrayT, Ops>(c, element_name);
 }
 
 // Binds a std::vector (e.g. for object API vector fields) whose data type is
@@ -922,7 +945,7 @@ inline void BindStdVectorArithmetic(nb::handle scope, const char *name) {
   }();
   detail::BindReadOperations<ArrayT, Ops>(c, element_name);
   detail::BindStdVectorWriteOperations<ArrayT, Ops>(c, element_name);
-  detail::BindStdVectorAllocOperations<ArrayT, Ops>(c);
+  detail::BindStdVectorAllocOperations<ArrayT, Ops>(c, element_name);
   if constexpr (kHasBuffer) { detail::BindArithmeticOperations<ArrayT>(c); }
 }
 
