@@ -708,7 +708,8 @@ inline void BindStdVectorWriteOperations(PyClass &c,
 // Operations for std::vectors whose elements can be default-constructed in
 // place.
 template<typename ArrayT, typename Ops, typename PyClass>
-inline void BindStdVectorAllocOperations(PyClass &c) {
+inline void BindStdVectorAllocOperations(PyClass &c,
+                                         const std::string &element_name) {
   // In-place appending an element.
   c.def(
       "add",
@@ -717,6 +718,23 @@ inline void BindStdVectorAllocOperations(PyClass &c) {
         return Ops::Get(self, self.size() - 1);
       },
       Ops::policy);
+  // For bound element types (tables, structs): appends a copy of `value` and
+  // returns the stored element, which (unlike `value`) updates the vector.
+  using value_type = std::remove_pointer_t<typename Ops::return_type>;
+  if constexpr (nb::detail::is_base_caster_v<
+                    nb::detail::make_caster<value_type>>) {
+    c.def(
+        "add",
+        [](ArrayT &self,
+           const value_type &value) -> typename Ops::return_type {
+          self.push_back(Ops::New(value));
+          return Ops::Get(self, self.size() - 1);
+        },
+        Ops::policy,
+        nb::sig(ElementSignature("def add(self, value: {T}, /) -> {T}",
+                                 element_name)
+                    .c_str()));
+  }
 
   c.def(
       "reserve", [](ArrayT &self, size_t size) { self.reserve(size); },
@@ -896,7 +914,7 @@ inline void BindStdVector(nb::handle scope, const char *name) {
       detail::MakeClass<ArrayT>(scope, name, "MutableSequence", element_name);
   detail::BindReadOperations<ArrayT, Ops>(c, element_name);
   detail::BindStdVectorWriteOperations<ArrayT, Ops>(c, element_name);
-  detail::BindStdVectorAllocOperations<ArrayT, Ops>(c);
+  detail::BindStdVectorAllocOperations<ArrayT, Ops>(c, element_name);
 }
 
 // Binds a std::vector (e.g. for object API vector fields) whose data type is
@@ -922,7 +940,7 @@ inline void BindStdVectorArithmetic(nb::handle scope, const char *name) {
   }();
   detail::BindReadOperations<ArrayT, Ops>(c, element_name);
   detail::BindStdVectorWriteOperations<ArrayT, Ops>(c, element_name);
-  detail::BindStdVectorAllocOperations<ArrayT, Ops>(c);
+  detail::BindStdVectorAllocOperations<ArrayT, Ops>(c, element_name);
   if constexpr (kHasBuffer) { detail::BindArithmeticOperations<ArrayT>(c); }
 }
 
