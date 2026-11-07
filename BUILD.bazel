@@ -92,6 +92,13 @@ filegroup(
     ],
 )
 
+# Public JSON schema generator (bfbs or parsed schema to JSON schema text).
+cc_library(
+    name = "json_schema",
+    linkstatic = 1,
+    deps = ["//src:json_schema"],
+)
+
 # Public flatc compiler library.
 cc_library(
     name = "flatc_library",

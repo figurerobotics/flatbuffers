@@ -142,6 +142,29 @@ static std::string GenType(const Type &type) {
   }
 }
 
+// Returns the JSON literal for a scalar field default, or "" when the field
+// has no representable default (non-scalars, union types, nan/inf).
+static std::string GenDefault(const FieldDef &field) {
+  const auto &type = field.value.type;
+  if (!IsScalar(type.base_type)) { return ""; }
+  const auto &constant = field.value.constant;
+  if (type.base_type == BASE_TYPE_BOOL) {
+    return constant == "0" ? "false" : "true";
+  }
+  if (type.enum_def != nullptr) {
+    if (type.enum_def->is_union) { return ""; }
+    const auto *enum_val = type.enum_def->FindByValue(constant);
+    if (enum_val == nullptr) { return ""; }
+    return "\"" + enum_val->name + "\"";
+  }
+  if (IsFloat(type.base_type) &&
+      (constant.find("nan") != std::string::npos ||
+       constant.find("inf") != std::string::npos)) {
+    return "";
+  }
+  return constant;
+}
+
 }  // namespace
 
 class JsonSchemaGenerator : public BaseGenerator {
@@ -265,6 +288,11 @@ class JsonSchemaGenerator : public BaseGenerator {
         typeLine += GenType(property->value.type);
         typeLine += arrayInfo;
         typeLine += deprecated_info;
+        const auto default_value = GenDefault(*property);
+        if (default_value != "") {
+          typeLine +=
+              "," + NewLine() + Indent(8) + "\"default\" : " + default_value;
+        }
         auto description = PrepareDescription(property->doc_comment);
         if (description != "") {
           typeLine +=
@@ -322,6 +350,13 @@ static bool GenerateJsonSchema(const Parser &parser, const std::string &path,
   jsons::JsonSchemaGenerator generator(parser, path, file_name);
   if (!generator.generate()) { return false; }
   return generator.save();
+}
+
+bool GenerateJsonSchemaString(const Parser &parser, std::string *out) {
+  jsons::JsonSchemaGenerator generator(parser, "", "");
+  if (!generator.generate()) { return false; }
+  *out = generator.getJson();
+  return true;
 }
 
 namespace {
