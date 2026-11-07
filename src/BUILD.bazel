@@ -65,6 +65,16 @@ cc_library(
     ],
 )
 
+# JSON schema generator, usable without the rest of flatc.
+cc_library(
+    name = "json_schema",
+    srcs = ["idl_gen_json_schema.cpp"],
+    hdrs = ["idl_gen_json_schema.h"],
+    strip_include_prefix = "/src",
+    visibility = ["//:__subpackages__"],
+    deps = [":flatbuffers"],
+)
+
 # Public flatc compiler library.
 cc_library(
     name = "flatc_library",
@@ -120,8 +130,6 @@ cc_library(
         "idl_gen_grpc.cpp",
         "idl_gen_java.cpp",
         "idl_gen_java.h",
-        "idl_gen_json_schema.cpp",
-        "idl_gen_json_schema.h",
         "idl_gen_kotlin.cpp",
         "idl_gen_kotlin.h",
         "idl_gen_kotlin_kmp.cpp",
@@ -154,6 +162,7 @@ cc_library(
     visibility = ["//:__pkg__"],
     deps = [
         ":flatc_library",
+        ":json_schema",
         "//grpc/src/compiler:cpp_generator",
         "//grpc/src/compiler:go_generator",
         "//grpc/src/compiler:java_generator",

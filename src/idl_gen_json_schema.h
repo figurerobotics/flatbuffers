@@ -21,11 +21,16 @@
 #include <string>
 
 #include "flatbuffers/code_generator.h"
+#include "flatbuffers/idl.h"
 
 namespace flatbuffers {
 
 // Constructs a new JsonSchema Code generator.
 std::unique_ptr<CodeGenerator> NewJsonSchemaCodeGenerator();
+
+// Generates the JSON schema for the root type of an already parsed (or
+// deserialized) schema and returns it as text instead of writing a file.
+bool GenerateJsonSchemaString(const Parser &parser, std::string *out);
 
 }  // namespace flatbuffers
 

@@ -4069,6 +4069,7 @@ bool FieldDef::Deserialize(Parser &parser, const reflection::Field *field) {
   presence = FieldDef::MakeFieldPresence(field->optional(), field->required());
   padding = field->padding();
   key = field->key();
+  deprecated = field->deprecated();
   offset64 = field->offset64();
   if (!DeserializeAttributes(parser, field->attributes())) return false;
   // TODO: this should probably be handled by a separate attribute
