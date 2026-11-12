@@ -877,6 +877,14 @@ void ParseUnionTest() {
       TEST_NULL(GenText(parser, parser.builder_.GetBufferPointer(), &text));
       return text;
     };
+    // Type field earlier in the object, not adjacent to the union value.
+    TEST_EQ_STR(
+        to_text("{ X_type: T, X2: -2, Z: [1, 2], W: { A: 3 }, X: { A: 1 } }",
+                false, false)
+            .c_str(),
+        to_text("{ X_type: T, X: { A: 1 }, X2: -2, Z: [1, 2], W: { A: 3 } }",
+                false, false)
+            .c_str());
     // Sorted keys: X2 and X_id sort between X and X_type.
     TEST_EQ_STR(
         to_text(
