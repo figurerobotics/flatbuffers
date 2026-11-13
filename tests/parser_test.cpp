@@ -826,6 +826,9 @@ void UnknownFieldsTest() {
                        "unknown_array: [ 1, 2, 3, 4],"
                        "unknown_object: { i: 10 },"
                        "\"unknown_object\": { \"i\": 10 },"
+                       "unknown_enum: Red,"
+                       "unknown_nan: -nan,"
+                       "unknown_function: deg(90),"
                        "i:10}"),
           true);
 
@@ -853,7 +856,7 @@ void ParseUnionTest() {
   {
     const char *schema =
         "enum E : ubyte { Red, Green } "
-        "table S { B:string; } union U { T, S } table T { A:int; I:U; } "
+        "table S { B:string; } union U { T, S } table T { A:int; I:U; C:E; } "
         "table V { X:U; X2:int; X_id:E; Z:[int]; W:T; F:float; } "
         "root_type V;";
     auto to_text = [&](const char *json, bool strict_json,
@@ -926,6 +929,24 @@ void ParseUnionTest() {
     TEST_EQ_STR(
         to_text("{ X { A: 1 } W { A: 2 } X_type: T }", false, true).c_str(),
         to_text("{ X_type: T X { A: 1 } W { A: 2 } }", false, true).c_str());
+    // Non-strict values that must be skipped while looking for X_type: a bare
+    // enum value, an unquoted nested union type, -nan, and a function call.
+    TEST_EQ_STR(to_text("{ X: { I: { B: \"in\" }, A: 1, I_type: S }, "
+                        "X_id: Green, F: -nan, X_type: T }",
+                        false, false)
+                    .c_str(),
+                to_text("{ X_type: T, X: { A: 1, I_type: S, "
+                        "I: { B: \"in\" } }, X_id: Green, F: -nan }",
+                        false, false)
+                    .c_str());
+    TEST_EQ_STR(
+        to_text("{ X: { A: 1 }, F: deg(90), X_type: T }", false, false).c_str(),
+        to_text("{ X_type: T, X: { A: 1 }, F: deg(90) }", false, false)
+            .c_str());
+    // A bare enum value inside the union table, with X_type right after it.
+    TEST_EQ_STR(
+        to_text("{ X: { C: Green }, X_type: T }", false, false).c_str(),
+        to_text("{ X_type: T, X: { C: Green } }", false, false).c_str());
   }
 
   // Unions must be parsable with prefixed namespace.
@@ -943,6 +964,18 @@ void ParseUnionTest() {
   
   parser3.opts.lang_to_generate &= flatbuffers::IDLOptions::kJava;
   TEST_EQ(parser3.Parse(source), false);
+}
+
+void NestedFlatbufferNonStrictJsonTest() {
+  // A nested_flatbuffer field given as JSON is skipped once to find where it
+  // ends, so non-strict values inside it must be skippable.
+  flatbuffers::Parser parser;
+  TEST_EQ(parser.Parse("enum E : ubyte { Red, Green } "
+                       "table I { e:E; f:float; } "
+                       "table O { n:[ubyte] (nested_flatbuffer: \"I\"); } "
+                       "root_type O; "
+                       "{ n: { e: Green, f: -nan } }"),
+          true);
 }
 
 void ValidSameNameDifferentNamespaceTest() {

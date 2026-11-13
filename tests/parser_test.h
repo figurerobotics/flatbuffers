@@ -22,6 +22,7 @@ void UnicodeTestGenerateTextFailsOnNonUTF8();
 void UnicodeSurrogatesTest();
 void UnknownFieldsTest();
 void ParseUnionTest();
+void NestedFlatbufferNonStrictJsonTest();
 void ValidSameNameDifferentNamespaceTest();
 void WarningsAsErrorsTest();
 void StringVectorDefaultsTest();

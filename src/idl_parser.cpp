@@ -3355,12 +3355,22 @@ CheckedError Parser::SkipAnyJsonValue() {
     case kTokenStringConstant:
     case kTokenIntegerConstant:
     case kTokenFloatConstant: NEXT(); break;
-    default:
-      if (IsIdent("true") || IsIdent("false") || IsIdent("null") ||
-          IsIdent("inf")) {
+    default: {
+      // Mirror the non-strict scalar forms ParseSingleValue accepts: an
+      // optionally signed identifier (enum value, true, false, null, nan,
+      // inf, ...), which may be a conversion function call such as deg(90).
+      if (Is('+') || Is('-')) {
         NEXT();
-      } else
-        return TokenError();
+        if (!Is(kTokenIdentifier)) return TokenError();
+      }
+      if (!Is(kTokenIdentifier)) return TokenError();
+      NEXT();
+      if (Is('(')) {
+        NEXT();
+        ECHECK(SkipAnyJsonValue());
+        EXPECT(')');
+      }
+    }
   }
   return NoError();
 }

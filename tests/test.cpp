@@ -1672,6 +1672,7 @@ int FlatBufferTests(const std::string &tests_data_path) {
   InvalidUTF8Test();
   UnknownFieldsTest();
   ParseUnionTest();
+  NestedFlatbufferNonStrictJsonTest();
   ValidSameNameDifferentNamespaceTest();
   ConformTest();
   ParseProtoBufAsciiTest();
