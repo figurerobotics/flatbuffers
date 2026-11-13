@@ -70,6 +70,16 @@ void ErrorTest() {
   TestError("struct X { Y:int (deprecated); }", "deprecate");
   TestError("union Z { X } table X { Y:Z; } root_type X; { Y: {}, A:1 }",
             "missing type field");
+  TestError("union Z { X } table X { b:int; Y:Z; } root_type X; { b:1, Y: {} }",
+            "missing type field");
+  TestError(
+      "union Z { X } table X { b:int; Y:Z; } root_type X; { Y: {}, b:1, }",
+      "missing type field");
+  // Vectors of unions still need their type vector to come first.
+  TestError(
+      "union Z { X } table X { Y:[Z]; } root_type X; "
+      "{ Y: [{}], Y_type: [X] }",
+      "missing type field");
   TestError("union Z { X } table X { Y:Z; } root_type X; { Y_type: 99, Y: {",
             "type id");
   TestError("table X { Y:int; } root_type X; { Z:", "unknown field");
@@ -816,6 +826,9 @@ void UnknownFieldsTest() {
                        "unknown_array: [ 1, 2, 3, 4],"
                        "unknown_object: { i: 10 },"
                        "\"unknown_object\": { \"i\": 10 },"
+                       "unknown_enum: Red,"
+                       "unknown_nan: -nan,"
+                       "unknown_function: deg(90),"
                        "i:10}"),
           true);
 
@@ -835,6 +848,107 @@ void ParseUnionTest() {
                        "root_type V;"
                        "{ X:{ A:1 }, X_type: T }"),
           true);
+
+  // The type field may come anywhere after the union value, not only right
+  // after it. JSON keys are unordered, and sorting them puts siblings such as
+  // X2 or X_id between X and X_type. Check each ordering against the same
+  // data given in schema order.
+  {
+    const char *schema =
+        "enum E : ubyte { Red, Green } "
+        "table S { B:string; } union U { T, S } table T { A:int; I:U; C:E; } "
+        "table V { X:U; X2:int; X_id:E; Z:[int]; W:T; F:float; } "
+        "root_type V;";
+    auto to_text = [&](const char *json, bool strict_json,
+                       bool protobuf_ascii_alike) {
+      flatbuffers::IDLOptions opts;
+      opts.strict_json = strict_json;
+      opts.protobuf_ascii_alike = protobuf_ascii_alike;
+      opts.indent_step = -1;
+      flatbuffers::Parser parser(opts);
+      if (!parser.Parse(schema)) {
+        TEST_OUTPUT_LINE("schema: %s", parser.error_.c_str());
+        TEST_ASSERT(false);
+        return std::string();
+      }
+      if (!parser.Parse(json)) {
+        TEST_OUTPUT_LINE("%s: %s", json, parser.error_.c_str());
+        TEST_ASSERT(false);
+        return std::string();
+      }
+      std::string text;
+      TEST_NULL(GenText(parser, parser.builder_.GetBufferPointer(), &text));
+      return text;
+    };
+    // Type field earlier in the object, not adjacent to the union value.
+    TEST_EQ_STR(
+        to_text("{ X_type: T, X2: -2, Z: [1, 2], W: { A: 3 }, X: { A: 1 } }",
+                false, false)
+            .c_str(),
+        to_text("{ X_type: T, X: { A: 1 }, X2: -2, Z: [1, 2], W: { A: 3 } }",
+                false, false)
+            .c_str());
+    // Sorted keys: X2 and X_id sort between X and X_type.
+    TEST_EQ_STR(
+        to_text(
+            "{ X: { A: 1 }, X2: -2, X_id: \"Green\", X_type: T, Z: [1, 2] }",
+            false, false)
+            .c_str(),
+        to_text(
+            "{ X_type: T, X: { A: 1 }, X2: -2, X_id: \"Green\", Z: [1, 2] }",
+            false, false)
+            .c_str());
+    // Type last, after scalars, a table and an empty vector.
+    TEST_EQ_STR(
+        to_text("{ X: { B: \"s\" }, F: 1.5, W: { A: 3 }, Z: [], X_type: S }",
+                false, false)
+            .c_str(),
+        to_text("{ X_type: S, X: { B: \"s\" }, F: 1.5, W: { A: 3 }, Z: [] }",
+                false, false)
+            .c_str());
+    // Strict JSON, type last after a nested table.
+    TEST_EQ_STR(
+        to_text(
+            "{\"X\": {\"B\": \"hi\"}, \"W\": {\"A\": 3}, \"X_type\": \"S\"}",
+            true, false)
+            .c_str(),
+        to_text(
+            "{\"X_type\": \"S\", \"X\": {\"B\": \"hi\"}, \"W\": {\"A\": 3}}",
+            true, false)
+            .c_str());
+    // A nested union whose own type field also trails.
+    TEST_EQ_STR(to_text("{ X: { I: { B: \"in\" }, A: 1, I_type: \"S\" }, "
+                        "F: -2.5, X_type: T }",
+                        false, false)
+                    .c_str(),
+                to_text("{ X_type: T, X: { A: 1, I_type: \"S\", "
+                        "I: { B: \"in\" } }, F: -2.5 }",
+                        false, false)
+                    .c_str());
+    // protobuf_ascii_alike: no commas, and no colon before objects.
+    TEST_EQ_STR(
+        to_text("{ X { A: 1 } W { A: 2 } X_type: T }", false, true).c_str(),
+        to_text("{ X_type: T X { A: 1 } W { A: 2 } }", false, true).c_str());
+    // Non-strict values that must be skipped while looking for X_type: a bare
+    // enum value, an unquoted nested union type, -nan, and a function call.
+    TEST_EQ_STR(to_text("{ X: { I: { B: \"in\" }, A: 1, I_type: S }, "
+                        "X_id: Green, F: -nan, X_type: T }",
+                        false, false)
+                    .c_str(),
+                to_text("{ X_type: T, X: { A: 1, I_type: S, "
+                        "I: { B: \"in\" } }, X_id: Green, F: -nan }",
+                        false, false)
+                    .c_str());
+    TEST_EQ_STR(
+        to_text("{ X: { A: 1 }, F: deg(90), X_type: T }", false, false).c_str(),
+        to_text("{ X_type: T, X: { A: 1 }, F: deg(90) }", false, false)
+            .c_str());
+    // A bare enum value inside the union table, with X_type right after it.
+    TEST_EQ_STR(
+        to_text("{ X: { C: Green }, X_type: T }", false, false).c_str(),
+        to_text("{ X_type: T, X: { C: Green } }", false, false).c_str());
+  }
+
   // Unions must be parsable with prefixed namespace.
   flatbuffers::Parser parser2;
   TEST_EQ(parser2.Parse("namespace N; table A {} namespace; union U { N.A }"
@@ -850,6 +964,18 @@ void ParseUnionTest() {
   
   parser3.opts.lang_to_generate &= flatbuffers::IDLOptions::kJava;
   TEST_EQ(parser3.Parse(source), false);
+}
+
+void NestedFlatbufferNonStrictJsonTest() {
+  // A nested_flatbuffer field given as JSON is skipped once to find where it
+  // ends, so non-strict values inside it must be skippable.
+  flatbuffers::Parser parser;
+  TEST_EQ(parser.Parse("enum E : ubyte { Red, Green } "
+                       "table I { e:E; f:float; } "
+                       "table O { n:[ubyte] (nested_flatbuffer: \"I\"); } "
+                       "root_type O; "
+                       "{ n: { e: Green, f: -nan } }"),
+          true);
 }
 
 void ValidSameNameDifferentNamespaceTest() {

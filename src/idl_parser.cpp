@@ -1339,9 +1339,9 @@ CheckedError Parser::ParseAnyValue(Value &val, FieldDef *field,
         }
       }
       if (constant.empty() && !inside_vector) {
-        // We haven't seen the type field yet. Sadly a lot of JSON writers
-        // output these in alphabetical order, meaning it comes after this
-        // value. So we scan past the value to find it, then come back here.
+        // We haven't seen the type field yet. JSON object keys are unordered
+        // and many JSON writers sort them, so it may come anywhere after this
+        // value. Scan the rest of this object to find it, then come back here.
         // We currently don't do this for vectors of unions because the
         // scanning/serialization logic would get very complicated.
         auto type_name = field->name + UnionTypeFieldSuffix();
@@ -1350,24 +1350,26 @@ CheckedError Parser::ParseAnyValue(Value &val, FieldDef *field,
         FLATBUFFERS_ASSERT(type_field);  // Guaranteed by ParseField().
         // Remember where we are in the source file, so we can come back here.
         auto backup = *static_cast<ParserState *>(this);
-        ECHECK(SkipAnyJsonValue());  // The table.
-        ECHECK(ParseComma());
-        auto next_name = attribute_;
-        if (Is(kTokenStringConstant)) {
+        ECHECK(SkipAnyJsonValue());  // The union value itself.
+        // Scan the remaining keys of this object for the type field.
+        while (!Is('}') && !Is(']') && !Is(kTokenEof)) {
+          ECHECK(ParseComma());
+          if (!Is(kTokenStringConstant) && !Is(kTokenIdentifier)) break;
+          auto next_name = attribute_;
           NEXT();
-        } else {
-          EXPECT(kTokenIdentifier);
+          if (!opts.protobuf_ascii_alike || !(Is('{') || Is('['))) EXPECT(':');
+          if (next_name == type_name) {
+            ParseDepthGuard depth_guard(this);
+            ECHECK(depth_guard.Check());
+            Value type_val = type_field->value;
+            ECHECK(ParseAnyValue(type_val, type_field, 0, nullptr, 0));
+            constant = type_val.constant;
+            break;
+          }
+          ECHECK(SkipAnyJsonValue());
         }
-        if (next_name == type_name) {
-          EXPECT(':');
-          ParseDepthGuard depth_guard(this);
-          ECHECK(depth_guard.Check());
-          Value type_val = type_field->value;
-          ECHECK(ParseAnyValue(type_val, type_field, 0, nullptr, 0));
-          constant = type_val.constant;
-          // Got the information we needed, now rewind:
-          *static_cast<ParserState *>(this) = backup;
-        }
+        // Got the information we needed (or not), now rewind:
+        *static_cast<ParserState *>(this) = backup;
       }
       if (constant.empty() && !vector_of_union_types) {
         return Error("missing type field for this union value: " + field->name);
@@ -3353,12 +3355,22 @@ CheckedError Parser::SkipAnyJsonValue() {
     case kTokenStringConstant:
     case kTokenIntegerConstant:
     case kTokenFloatConstant: NEXT(); break;
-    default:
-      if (IsIdent("true") || IsIdent("false") || IsIdent("null") ||
-          IsIdent("inf")) {
+    default: {
+      // Mirror the non-strict scalar forms ParseSingleValue accepts: an
+      // optionally signed identifier (enum value, true, false, null, nan,
+      // inf, ...), which may be a conversion function call such as deg(90).
+      if (Is('+') || Is('-')) {
         NEXT();
-      } else
-        return TokenError();
+        if (!Is(kTokenIdentifier)) return TokenError();
+      }
+      if (!Is(kTokenIdentifier)) return TokenError();
+      NEXT();
+      if (Is('(')) {
+        NEXT();
+        ECHECK(SkipAnyJsonValue());
+        EXPECT(')');
+      }
+    }
   }
   return NoError();
 }
