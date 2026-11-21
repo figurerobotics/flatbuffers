@@ -2808,9 +2808,16 @@ class PythonGenerator : public BaseGenerator {
         default:
           // Generates code for scalar values. If the value equals to the
           // default value, builder will automatically ignore it. So we don't
-          // need to check the value ahead.
-          code += GenIndents(2) + struct_type + "Add" + field_method +
-                  "(builder, self." + field_field + ")";
+          // need to check the value ahead, except for an optional scalar left
+          // None: an enum's adder reads its .value, which None does not have.
+          if (field.IsScalarOptional()) {
+            code += GenIndents(2) + "if self." + field_field + " is not None:";
+            code += GenIndents(3) + struct_type + "Add" + field_method +
+                    "(builder, self." + field_field + ")";
+          } else {
+            code += GenIndents(2) + struct_type + "Add" + field_method +
+                    "(builder, self." + field_field + ")";
+          }
           break;
       }
     }
